@@ -6,8 +6,8 @@ WHITE-RABBIT is a summer-internship project at a government high-performance
 computing center. It engineers and red-teams a purpose-built honeypot virtual
 machine in order to test network anomaly-detection machine-learning models.
 Traffic from the honeypot is mirrored to standalone detection stacks, and two
-adversary profiles — an opportunistic intruder and a covert long-dwell operator
-— are emulated under a tightly scoped engagement so the models can be scored
+adversary profiles (run1: an opportunistic intruder, and run2: a covert long-dwell operator)
+are emulated under a tightly scoped engagement so the models can be scored
 against activity known to be malicious.
 
 Anomaly-detection models on production networks train on overwhelmingly benign
@@ -16,15 +16,14 @@ the "normal" class is too thin and the models separate attack from baseline on
 trivial artifacts rather than on meaningful structure.
 
 This repository is the benign traffic generator that produces that baseline. It
-emulates the everyday activity of the honeypot's fictional user — a
-research-computing staff member using the VM as a work desktop — as a set of
-automatically scheduled processes. It produces three reproducible,
-timestamp-labeled captures: a long benign baseline (unsupervised training data
-for the detection models) and the same benign substrate running underneath each
-of the two attack runs. Because every benign action is logged, each packet in a
-capture can be attributed to a known benign process, a known user or attacker
-action, or the emulated adversary — which is what makes the resulting dataset
-usable as a golden evaluation set.
+emulates the everyday activity of the honeypot's fictional user (Michael Gunderson:
+a research-computing staff member using the VM as a work desktop) as a set of
+automatically scheduled processes. It produces three reproducible, timestamp-labeled
+captures: a long benign baseline (unsupervised training data for the detection models)
+and the same benign substrate running underneath each of the two attack runs. 
+Because every benign action is logged, each packet in a capture can be attributed
+to a known benign process, a known user or attacker action, or the emulated adversary.
+This methodology ensures that the resulting dataset usable as a golden evaluation set.
 
 ## Repository contents
 
@@ -41,7 +40,7 @@ usable as a golden evaluation set.
 | `companions/health_server.py` | service VM | target for the healthcheck |
 
 Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
-browsing. Those are the anomalous and human streams; they are recorded with
+browsing. Those are the anomalous and human streams, and they are recorded with
 `log_user.py`.
 
 ## Traffic model
@@ -122,7 +121,7 @@ records the active run id for `log_user.py`.
 
 ## Running a capture
 
-A capture involves two hosts. The same seed is used on both; one seed reproduces
+A capture involves two hosts. The same seed is used on both: one seed reproduces
 the whole run because each process is seeded from `(seed, process_name)`.
 
 1. On the capture host, start tcpdump and the honeypot processes. The script
@@ -216,10 +215,10 @@ it must share it or the distributions are not comparable.
 ## Two decisions worth knowing
 
 **Zabbix.** Off by default in the config, because the real Zabbix agent daemon
-should already be running on the honeypot — it is genuine cover traffic and also
-provides the service account the covert run impersonates. Leaving the daemon on
-and noting its interval is the recommended path; the manifest records that this
-stream exists even though its individual sends are not logged by the generator.
+should already be running on the honeypot. Zabbix provides cover traffic as well
+as the service account the covert run impersonates. Leaving the daemon on
+and noting its interval is the recommended path, as the manifest records that this
+stream exists (even though its individual sends are not logged by the generator).
 The scripted Zabbix process should be enabled only if the daemon's active checks
 are disabled, otherwise two Zabbix streams appear.
 

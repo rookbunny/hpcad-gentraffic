@@ -1,0 +1,105 @@
+# Traffic generator configuration TEMPLATE.
+#
+# This template contains no environment-specific values. Run ./SETUP.sh to
+# generate config.yaml from it; the generated config.yaml is gitignored and must
+# not be committed. Cadence and profiles below are safe to keep in version
+# control and rarely need editing.
+#
+# REPRODUCIBILITY: every process's interval sequence is a pure function of
+# (master_seed, process_name). A single --seed reproduces the whole run across
+# every host it runs on. Reseed per capture so the benign scaffold is not a
+# fixed fingerprint across the three captures (see README).
+
+endpoints:
+  # --- internal (each must resolve to a DIFFERENT host than the honeypot, or
+  #     the flow never crosses the wire and the mirror will not see it) ---
+  imap_host:         "__IMAP_HOST__"
+  imap_port:         __IMAP_PORT__          # STARTTLS on 143; use 993 for implicit TLS
+  imap_user:         "__IMAP_USER__"
+  imap_pass:         "__IMAP_PASS__"        # generated into gitignored config.yaml;
+                                            # overridable at runtime via $IMAP_PASS
+  smtp_host:         "__SMTP_HOST__"
+  smtp_port:         __SMTP_PORT__
+  chat_ws_url:       "__CHAT_WS_URL__"      # ws_echo_server.py on the chat VM
+  healthcheck_url:   "__HEALTHCHECK_URL__"  # health_server.py on the service VM
+  node_exporter_url: "__NODE_EXPORTER_URL__" # node_exporter ON the honeypot (:9100)
+  zabbix_server:     "__ZABBIX_SERVER__"    # only used if the zabbix process is enabled
+  zabbix_host:       "__ZABBIX_HOST__"      # must match the host name registered in Zabbix
+
+  # --- external (real) ---
+  # Rotating public space-weather products; sizes span KB..16MB for a natural
+  # sustained transfer. No authentication required.
+  noaa_urls:
+    - "https://services.swpc.noaa.gov/json/goes/primary/euvs-7-day.json"
+    - "https://services.swpc.noaa.gov/json/goes/primary/differential-protons-7-day.json"
+    - "https://services.swpc.noaa.gov/json/goes/primary/differential-alphas-7-day.json"
+    - "https://services.swpc.noaa.gov/json/goes/primary/differential-electrons-7-day.json"
+    - "https://services.swpc.noaa.gov/json/enlil_time_series.json"
+    - "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
+    - "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
+
+# Cadence table. period/jitter/duration in SECONDS. host = which --role runs it.
+# floor clamps the sampled interval so jitter can never drive it sub-zero.
+processes:
+  chat_ws:
+    host: honeypot
+    kind: persistent          # one long-lived connection, periodic pings
+    period: 20
+    jitter: 15
+    floor: 3
+  healthcheck:
+    host: honeypot
+    kind: periodic
+    period: 60
+    jitter: 15
+    floor: 5
+  email:
+    host: honeypot
+    kind: periodic
+    period: 120
+    jitter: 30
+    floor: 20
+    smtp_every: 5             # send via SMTP once every N polls
+  noaa:
+    host: honeypot
+    kind: periodic
+    period: 1800              # 30m
+    jitter: 180              # +-3m
+    floor: 300
+    duration: 180            # loop downloads for ~3m per pull
+  prom_scrape:
+    host: promsvc            # runs on the Prometheus/monitoring VM, not the honeypot
+    kind: periodic
+    period: 50
+    jitter: 10
+    floor: 5
+  zabbix:
+    host: honeypot
+    kind: periodic
+    period: 60
+    jitter: 10
+    floor: 10
+    enabled_default: false   # off: the real Zabbix agent daemon provides this
+                             # stream. See README, "Zabbix decision".
+  noop:
+    host: any
+    kind: periodic           # self-test only; never enable in a real profile
+    period: 1
+    jitter: 0.5
+    floor: 0.2
+
+# A profile = a run length + the set of processes that fire during it.
+# The C2 beacon and manual web browsing are NOT here (hand-run / manual).
+profiles:
+  baseline:
+    run_seconds: 14400        # 4h  = 960 buckets @ 15s
+    processes: [chat_ws, healthcheck, email, noaa, prom_scrape]
+  run1:                       # opportunistic run: benign scaffold under the loud attack
+    run_seconds: 1200         # 20m = 80 buckets (cap)
+    processes: [chat_ws, healthcheck, email, prom_scrape]
+  run2:                       # covert run: benign scaffold + optional live browsing as cover
+    run_seconds: 2400         # 40m = 160 buckets
+    processes: [chat_ws, healthcheck, email, noaa, prom_scrape]
+  selftest:
+    run_seconds: 6
+    processes: [noop]

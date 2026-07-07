@@ -1,0 +1,39 @@
+# Optional bounded service for long captures (the 4h baseline in particular), so
+# a run survives an SSH disconnect and auto-stops at the window end.
+#
+# This is a TEMPLATE unit: the part after @ is the instance name, which is passed
+# straight through to gen.py as the profile via %i. Start it as
+# "Honeypot_gentraffic@<profile>". Installed and used:
+#
+#   sudo cp systemd/Honeypot_gentraffic@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl start Honeypot_gentraffic@baseline    # %i -> baseline
+#   journalctl -u Honeypot_gentraffic@baseline -f
+#
+# To pin a seed (reproducible run), drop a seed into the optional env file first:
+#   echo 'SEED_ARG=--seed 1337' | sudo tee /opt/gunderson/run.env
+# With no env file, gen.py picks a random seed and records it in the manifest.
+#
+# This unit runs the generator only; to capture a pcap for the run, start tcpdump
+# separately, or use run_capture.sh inside a tmux session for capture that
+# survives a disconnect.
+#
+# RuntimeMaxSec is a hard backstop; the driver already exits at run_seconds.
+# Adjust the two paths if the repository is deployed somewhere other than
+# /opt/gunderson.
+
+[Unit]
+Description=Honeypot benign traffic generator (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/gunderson
+EnvironmentFile=-/opt/gunderson/run.env
+ExecStart=/opt/gunderson/.venv/bin/python3 /opt/gunderson/gen.py --profile %i --role honeypot --base /opt/gunderson $SEED_ARG
+RuntimeMaxSec=5h
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

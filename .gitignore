@@ -1,0 +1,14 @@
+# generated config holds a password and internal addresses
+config.yaml
+
+# per-run capture directories, ground-truth logs, pcaps
+logs/
+
+# run pointer and optional seed env file
+.current_run
+run.env
+
+# python venv and caches
+.venv/
+__pycache__/
+*.pyc

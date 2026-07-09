@@ -11,8 +11,8 @@
 #   journalctl -u Honeypot_gentraffic@baseline -f
 #
 # To pin a seed (reproducible run), drop a seed into the optional env file first:
-#   echo 'SEED_ARG=--seed 1337' | sudo tee /opt/gunderson/run.env
-# With no env file, gen.py picks a random seed and records it in the manifest.
+#   echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/run.env
+# With no env file, gen.py picks a random 5-digit seed and records it in the manifest.
 #
 # This unit runs the generator only; to capture a pcap for the run, start tcpdump
 # separately, or use run_capture.sh inside a tmux session for capture that

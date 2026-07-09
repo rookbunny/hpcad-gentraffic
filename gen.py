@@ -13,8 +13,8 @@ selects which processes fire locally (honeypot vs. promsvc). One --seed
 reproduces the whole run across all hosts, because each process is seeded from
 (master_seed, process_name).
 
-    python3 gen.py --profile baseline --role honeypot --seed 1337
-    python3 gen.py --profile baseline --role promsvc  --seed 1337 --run-id <id>
+    python3 gen.py --profile baseline --role honeypot --seed 13370
+    python3 gen.py --profile baseline --role promsvc  --seed 13370 --run-id 0001
 
 Not generated here: the C2 beacon (hand-run) and manual web browsing. Those are
 the anomalous / human streams, recorded via log_user.py.
@@ -41,6 +41,7 @@ class Ctx:
     def __init__(self, run_id, seed, role, endpoints, run_dir, stop_event):
         self.run_id = run_id
         self.seed = seed
+        self.tag = logio.tag_for(run_id, seed)
         self.role = role
         self.ep = endpoints
         self.run_dir = run_dir
@@ -52,7 +53,7 @@ class Ctx:
         rec = {"run_id": self.run_id, "seed": self.seed, "role": self.role,
                "proc": proc, "ts": now_iso(), "ts_epoch": round(time.time(), 3),
                "event": event, "ok": ok, "detail": detail}
-        logio.write_benign(self.run_dir, self.run_id, rec)
+        logio.write_benign(self.run_dir, self.tag, rec)
         with self._lock:
             self._counts[proc] = self._counts.get(proc, 0) + 1
 
@@ -228,11 +229,11 @@ def main():
     ap.add_argument("--role", default="honeypot",
                     help="which host this is: honeypot | promsvc | any")
     ap.add_argument("--seed", type=int, default=None,
-                    help="master seed; omit for a fresh random one (RESEED PER RUN)")
+                    help="master seed; omit for a fresh random 5-digit one (RESEED PER RUN)")
     ap.add_argument("--run-seconds", type=int, default=None,
                     help="override the profile's run length")
     ap.add_argument("--base", default=".",
-                    help="repo root; run dirs are created under <base>/logs/<run_id>_logs/")
+                    help="repo root; run dirs are created under <base>/logs/<tag>_logs/")
     ap.add_argument("--run-id", default=None)
     args = ap.parse_args()
 
@@ -244,10 +245,11 @@ def main():
         sys.exit(f"unknown profile {args.profile!r}; have {list(cfg['profiles'])}")
     prof = cfg["profiles"][args.profile]
     run_seconds = args.run_seconds or prof["run_seconds"]
-    seed = args.seed if args.seed is not None else random.SystemRandom().randint(1, 2**31)
-    run_id = args.run_id or f"{args.profile}-{datetime.now():%Y%m%d-%H%M%S}-{seed}"
+    seed = args.seed if args.seed is not None else random.SystemRandom().randint(10000, 99999)
+    run_id = args.run_id or logio.next_run_id(args.base)
+    tag = logio.tag_for(run_id, seed)
 
-    run_dir = logio.run_dir_for(args.base, run_id)
+    run_dir = logio.run_dir_for(args.base, tag)
     os.makedirs(run_dir, exist_ok=True)
 
     selected = []
@@ -272,11 +274,11 @@ def main():
                  "active checks are running, that Zabbix stream is present but "
                  "not logged here."),
     }
-    man_path = os.path.join(run_dir, f"{run_id}.{args.role}.manifest.json")
+    man_path = os.path.join(run_dir, f"{tag}.{args.role}.manifest.json")
     with open(man_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    print(f"[+] run_id={run_id}")
+    print(f"[+] run_id={run_id} tag={tag}")
     print(f"[+] role={args.role} seed={seed} run={run_seconds}s "
           f"({run_seconds//15} buckets @15s)")
     print(f"[+] processes: {', '.join(selected) or '(none for this role)'}")

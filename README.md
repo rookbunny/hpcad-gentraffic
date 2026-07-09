@@ -114,11 +114,13 @@ dependencies, and never uses the mail password.
 6. (Optional) Install the systemd unit for long unattended runs — see
    "Long runs (systemd)" below.
 
-Each capture creates its own directory `logs/<run_id>_logs/` under the repository
-root, containing `<run_id>_knownbenign.json`, `<run_id>_knownuser.json`,
-`<run_id>_alltraffic.json`, the `<run_id>.pcap`, and
-`<run_id>.<role>.manifest.json`. A `.current_run` pointer at the repository root
-records the active run id for `log_user.py`.
+A run is identified by a sequential run id (`0001`, `0002`, ...) and a 5-digit
+seed. On disk both are folded into a single stem, the run tag `R<run_id>-S<seed>`
+(for example `R0001-S12345`). Each capture creates its own directory
+`logs/<tag>_logs/` under the repository root, containing `<tag>_knownbenign.json`,
+`<tag>_knownuser.json`, `<tag>_alltraffic.json`, the `<tag>.pcap`, and
+`<tag>.<role>.manifest.json`. A `.current_run` pointer at the repository root
+records the active run tag for `log_user.py`.
 
 ## Running a capture
 
@@ -129,8 +131,8 @@ the whole run because each process is seeded from `(seed, process_name)`.
    prints a run id and seed.
 
    ```bash
-   sudo ./run_capture.sh baseline ens19          # fresh seed
-   sudo ./run_capture.sh run2     ens19  1337     # pinned seed
+   sudo ./run_capture.sh baseline ens19          # fresh 5-digit seed
+   sudo ./run_capture.sh run2     ens19  13370    # pinned seed
    ```
 
 2. On the monitoring VM, run the scrape process with the same seed and run id.
@@ -140,7 +142,7 @@ the whole run because each process is seeded from `(seed, process_name)`.
        --seed <seed> --run-id <run_id>
    ```
 
-   This creates a matching `logs/<run_id>_logs/` on the monitoring VM holding
+   This creates a matching `logs/<tag>_logs/` on the monitoring VM holding
    that host's benign log and manifest.
 
 3. During `run1` and `run2`, record each attacker action and browsing session as
@@ -177,7 +179,7 @@ starting; with no file present the generator selects a random seed and records
 it in the manifest.
 
 ```bash
-echo 'SEED_ARG=--seed 1337' | sudo tee /opt/gunderson/run.env
+echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/run.env
 ```
 
 The systemd unit runs the generator only. For a baseline pcap that survives a
@@ -194,18 +196,18 @@ logs rather than from the timing.
 
 ## Logging and labeling
 
-All ground truth for a capture lives in that capture's `logs/<run_id>_logs/`
+All ground truth for a capture lives in that capture's `logs/<tag>_logs/`
 directory as newline-delimited JSON:
 
-- `<run_id>_knownbenign.json` — every scripted benign action, timestamped.
-- `<run_id>_knownuser.json` — every manual action recorded via `log_user.py`
+- `<tag>_knownbenign.json` — every scripted benign action, timestamped.
+- `<tag>_knownuser.json` — every manual action recorded via `log_user.py`
   (attacker actions and web browsing).
-- `<run_id>_alltraffic.json` — the union of the two, distinguished by the
+- `<tag>_alltraffic.json` — the union of the two, distinguished by the
   `class` field.
 
-Every record also carries `run_id` and `role`, so events remain attributable
-per host even after files from multiple hosts are merged. The `<run_id>.pcap`
-sits in the same directory. Within a run window, only the scripted benign set,
+Every record also carries `run_id`, `seed`, and `role`, so events remain
+attributable per host even after files from multiple hosts are merged. The
+`<tag>.pcap` sits in the same directory. Within a run window, only the scripted benign set,
 the recorded manual actions, and the emulated adversary are present, so any
 packet not attributable to a benign or user record belongs to the adversary.
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Monitor passive capture interface (promisc + offloads disabled)
+Documentation=file:///etc/mirror-persistence/monitor.env
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Optional override for CAP_IF. The leading "-" makes it optional.
+EnvironmentFile=-/etc/mirror-persistence/monitor.env
+ExecStart=/usr/local/sbin/monitor-capture.sh
+
+[Install]
+WantedBy=multi-user.target

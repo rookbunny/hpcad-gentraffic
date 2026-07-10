@@ -38,6 +38,7 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 | `systemd/Honeypot_gentraffic@.service` | honeypot | optional bounded service for long runs |
 | `companions/ws_echo_server.py` | chat VM | target for the chat keepalive |
 | `companions/health_server.py` | service VM | target for the healthcheck |
+| [`mirror-persistence/`](mirror-persistence/README.md) | honeypot + monitor | reboot-persistent tc mirror + passive capture setup |
 
 Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
 browsing. Those are the anomalous and human streams, and they are recorded with
@@ -63,6 +64,8 @@ must be a different host than the honeypot.
 
 - Python 3.9+ on the honeypot and on the monitoring (promsvc) VM.
 - `tcpdump` on the capture host, and an interface carrying the mirror copy.
+  See [`mirror-persistence/`](mirror-persistence/README.md) for a reboot-persistent
+  way to set up and keep that mirror alive.
 - `node_exporter` running on the honeypot (exposes `:9100`).
 - Reachable internal targets for mail, chat, and the healthcheck. The two
   companion servers cover chat and healthcheck without additional software.

@@ -1,0 +1,15 @@
+[Unit]
+Description=Honeypot tc traffic mirror (SPAN port to mirror-out interface)
+Documentation=file:///etc/mirror-persistence/honeypot.env
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Optional overrides for SRC_IF / DST_IF. The leading "-" makes it optional.
+EnvironmentFile=-/etc/mirror-persistence/honeypot.env
+ExecStart=/usr/local/sbin/honeypot-mirror.sh
+
+[Install]
+WantedBy=multi-user.target

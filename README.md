@@ -1,4 +1,5 @@
-# Honeypot Benign Traffic Generator
+<img width="995" height="407" alt="white-rabbit logo" src="https://github.com/user-attachments/assets/e7dbd7d6-092d-4d88-a192-266e79808c91" />
+# White-Rabbit: Honeypot Benign Traffic Generator
 
 ## Overview
 

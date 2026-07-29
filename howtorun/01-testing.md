@@ -15,6 +15,7 @@
   - Healthcheck: `python3 health_server.py 0.0.0.0 8080`
 - `node_exporter` is reachable on the honeypot at `:9100`.
 - The mirror interface (for example `ens19`) carries the copied honeypot traffic.
+- The real `zabbix-agent` daemon is running on the honeypot. No Zabbix traffic is generated, so this daemon is the only source of that stream.
 
 ## Part A. Generator and logging wiring test
 
@@ -33,6 +34,34 @@ The `selftest` profile runs the `noop` process, which touches no real endpoint. 
    ```
 
    The closing summary is the thing being tested here. It should list `<tag>.pcap`, `<tag>_knownbenign.json`, `<tag>_alltraffic.json`, and `<tag>.honeypot.manifest.json`, each `OK` with a non-zero count, report roughly the elapsed time you let it run, and end with `all expected files were written successfully`. If it names a `MISSING`, `EMPTY`, or `PARTIAL` file instead, fix that before any real capture: the same check runs at the end of every run.
+
+   The summary also reports the Zabbix capture: the BPF filter it used, and how many packets landed in `<tag>_zabbix.pcap` and in the logs. A half-minute selftest may legitimately catch no Zabbix packets, which is reported as a warning rather than a failure. What must not appear is `zabbix: DISABLED` — that means `config.yaml` has no Zabbix addresses, so re-run `SETUP.sh` before a real capture.
+
+## Part A2. Zabbix capture wiring test
+
+Zabbix traffic is real, not generated, so it is worth confirming separately that the agent is talking and that its conversation reaches the mirror.
+
+1. Confirm the agent daemon is up on the honeypot.
+
+   ```bash
+   systemctl status zabbix-agent
+   ```
+
+2. Print the filter the logger will use, straight from `config.yaml`. It should name the Zabbix server and agent addresses and exclude the attacker address.
+
+   ```bash
+   ./.venv/bin/python3 zabbix_log.py --print-filter --iface ens19 \
+       --run-dir /tmp --tag R0000-S00000
+   ```
+
+3. Watch that filter on the mirror for a couple of the agent's intervals. Traffic in both directions on `:10050` (or `:10051` for active checks) means the stream is there to be captured.
+
+   ```bash
+   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 zabbix_log.py --print-filter \
+       --iface ens19 --run-dir /tmp --tag R0000-S00000)"
+   ```
+
+   Nothing at all here means either the agent is idle, the server is not polling it, or the mirror is not carrying the Zabbix conversation. Fix that before a real capture: the run would otherwise produce an empty Zabbix stream.
 
 3. Confirm the run directory and the run pointer.
 
@@ -94,6 +123,7 @@ Manual web browsing originates on the honeypot and exits to an external target. 
 - Companion endpoints respond and produce `ok=true` benign records under a real profile.
 - Proxied browsing appears on the mirror as flows sourced from the honeypot.
 - Manual browsing records appear in `<tag>_knownuser.json` and `<tag>_alltraffic.json` with `class=user`.
+- The summary reports the Zabbix capture as enabled, with a filter naming the configured addresses. Real Zabbix packets are visible on the mirror under that filter.
 
 ## Cleanup
 

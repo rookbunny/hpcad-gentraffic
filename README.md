@@ -35,6 +35,7 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 | `config.example.yaml` | — | template; `SETUP.sh` generates `config.yaml` from it |
 | `SETUP.sh` | each host | prompts for range values, writes `config.yaml` |
 | `run_capture.sh` | capture host | tcpdump + generator, tied under one run id |
+| `zabbix_log.py` | capture host | captures and labels the REAL Zabbix agent's traffic |
 | `log_user.py` | capture host | records manual/attacker events into the ground truth |
 | `logio.py` | — | shared append-only logging |
 | `systemd/Honeypot_gentraffic@.service` | honeypot | optional bounded service for long runs |
@@ -44,7 +45,9 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 
 Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
 browsing. Those are the anomalous and human streams, and they are recorded with
-`log_user.py`.
+`log_user.py`. Zabbix is not generated either — that stream comes from the real
+`zabbix-agent` daemon on the Rocky 9 honeypot and is captured at the packet level
+by `zabbix_log.py` (see "Zabbix" below).
 
 ## Traffic model
 
@@ -55,7 +58,7 @@ browsing. Those are the anomalous and human streams, and they are recorded with
 | email (IMAP + occasional SMTP) | 120s | ±30s | honeypot | internal mail server |
 | space-weather archive pull | 30m | ±3m | honeypot | external (real) |
 | Prometheus scrape | 50s | ±10s | promsvc VM | honeypot :9100 |
-| Zabbix | 60s | ±10s | honeypot | internal (off by default) |
+| Zabbix agent | the daemon's own interval | — | honeypot ↔ Zabbix server | **real, not generated**; captured per packet |
 | web browsing | manual | — | honeypot | external (operator) |
 | C2 beacon | 60s | ±15s | attacker → honeypot | hand-run, not here |
 
@@ -71,6 +74,10 @@ must be a different host than the honeypot.
 - `node_exporter` running on the honeypot (exposes `:9100`).
 - Reachable internal targets for mail, chat, and the healthcheck. The two
   companion servers cover chat and healthcheck without additional software.
+- The real `zabbix-agent` daemon running on the Rocky 9 honeypot and registered
+  with the Zabbix server, so there is a genuine Zabbix stream to capture. The
+  mirror must carry it: it is the same interface, but confirm the agent's
+  conversation with the server actually crosses the mirrored link.
 
 ## Setup
 
@@ -102,6 +109,11 @@ dependencies, and never uses the mail password.
    ./SETUP.sh
    ```
 
+   Three of its prompts are addresses used to attribute packets rather than to
+   generate traffic: the **Zabbix server IP**, the **Zabbix agent IP** (the
+   honeypot itself, which defaults to the honeypot address already entered), and
+   the **attacker IP**. `zabbix_log.py` builds its capture filter from them.
+
 4. Start the companion targets so the chat keepalive and healthcheck have
    endpoints. Run each on its respective VM.
 
@@ -122,7 +134,8 @@ A run is identified by a sequential run id (`0001`, `0002`, ...) and a 5-digit
 seed. On disk both are folded into a single stem, the run tag `R<run_id>-S<seed>`
 (for example `R0001-S12345`). Each capture creates its own directory
 `logs/<tag>_logs/` under the repository root, containing `<tag>_knownbenign.json`,
-`<tag>_knownuser.json`, `<tag>_alltraffic.json`, the `<tag>.pcap`, and
+`<tag>_knownuser.json`, `<tag>_knownzabbix.json`, `<tag>_alltraffic.json`, the
+`<tag>.pcap`, the Zabbix-only `<tag>_zabbix.pcap`, `<tag>.zabbix.meta.json`, and
 `<tag>.<role>.manifest.json`. A `.current_run` pointer at the repository root
 records the active run tag for `log_user.py`.
 
@@ -131,8 +144,8 @@ records the active run tag for `log_user.py`.
 A capture involves two hosts. The same seed is used on both: one seed reproduces
 the whole run because each process is seeded from `(seed, process_name)`.
 
-1. On the capture host, start tcpdump and the honeypot processes. The script
-   prints a run id and seed.
+1. On the capture host, start tcpdump, the Zabbix packet logger, and the honeypot
+   processes. The script prints a run id and seed.
 
    ```bash
    sudo ./run_capture.sh baseline ens19          # fresh 5-digit seed
@@ -177,8 +190,9 @@ the terminal running `run_capture.sh`:
 exit
 ```
 
-Either way the generator finalizes its manifest with the real elapsed time,
-tcpdump flushes, and a summary reports whether every expected file was written,
+Either way the generator finalizes its manifest with the real elapsed time, both
+tcpdumps flush, the Zabbix logger drains its tail and finalizes its meta file,
+and a summary reports whether every expected file was written,
 how many packets and records are in each, and how long the capture ran. That
 same summary prints on any other exit too -- a SIGTERM, a script error, a closed
 stdin -- so a run never ends silently. The exit status is non-zero if anything is
@@ -234,34 +248,95 @@ logs rather than from the timing.
 All ground truth for a capture lives in that capture's `logs/<tag>_logs/`
 directory as newline-delimited JSON:
 
-- `<tag>_knownbenign.json` — every scripted benign action, timestamped.
+- `<tag>_knownbenign.json` — the holistic benign union: every scripted benign
+  action, plus one record per real Zabbix packet.
 - `<tag>_knownuser.json` — every manual action recorded via `log_user.py`
   (attacker actions and web browsing).
-- `<tag>_alltraffic.json` — the union of the two, distinguished by the
-  `class` field.
+- `<tag>_knownzabbix.json` — the real Zabbix agent's traffic on its own, one
+  record per packet. A subset view of `knownbenign`, not a separate class.
+- `<tag>_alltraffic.json` — the union of everything, distinguished by the
+  `class` field. `knownbenign + knownuser == alltraffic` holds exactly, with the
+  Zabbix stream counted once inside `knownbenign`; `capture_report.py` checks
+  that arithmetic at the end of every run.
 
 Every record also carries `run_id`, `seed`, and `role`, so events remain
-attributable per host even after files from multiple hosts are merged. The
-`<tag>.pcap` sits in the same directory. Within a run window, only the scripted benign set,
-the recorded manual actions, and the emulated adversary are present, so any
-packet not attributable to a benign or user record belongs to the adversary.
+attributable per host even after files from multiple hosts are merged. Zabbix
+records use the same shape as the generator's, with `proc: zabbix` and
+`source: zabbix_agent`, so they merge without special casing.
+
+Two capture files sit in the same directory: `<tag>.pcap` is the whole wire, and
+`<tag>_zabbix.pcap` is the Zabbix subset of it, written by a separate tcpdump so
+the real Zabbix stream can be handled on its own without ever being mixed into
+the generated-traffic capture. The relationship is the same one the logs have —
+the Zabbix packets are present in the all-traffic capture exactly once, and
+mirrored into their own file. Within a run window, only the scripted benign set,
+the real Zabbix stream, the recorded manual actions, and the emulated adversary
+are present, so any packet not attributable to a benign, Zabbix, or user record
+belongs to the adversary.
 
 Capture the baseline and every run at the same 15s span. Count and volume
 features scale with the span, so the training baseline and the run scored against
 it must share it or the distributions are not comparable.
 
-## Two decisions worth knowing
+## Zabbix
 
-**Zabbix.** Off by default in the config, because the real Zabbix agent daemon
-should already be running on the honeypot. Zabbix provides cover traffic as well
-as the service account the covert run impersonates. Leaving the daemon on
-and noting its interval is the recommended path, as the manifest records that this
-stream exists (even though its individual sends are not logged by the generator).
-The scripted Zabbix process should be enabled only if the daemon's active checks
-are disabled, otherwise two Zabbix streams appear.
+Zabbix traffic is **real, never simulated**. Nothing in this repository generates
+it: the `zabbix-agent` daemon on the Rocky 9 honeypot and the Zabbix server that
+polls it are the only source, so the Zabbix stream in the dataset is genuine
+telemetry from a genuine agent. Zabbix matters twice over — it is cover traffic,
+and it is the service account the covert run impersonates — so a simulated
+stand-in would be the wrong thing to train or score a model against.
 
-**Per-destination periodicity.** The beacon (60s), the Zabbix stream (60s), and
-the healthcheck (60s) share a cadence by design. At a 15s span the 60s period
+`zabbix_log.py` records it. `run_capture.sh` starts it alongside the run's main
+tcpdump and stops it at the end of the run, and it can also be run by hand:
+
+```bash
+sudo ./.venv/bin/python3 zabbix_log.py --iface ens19 \
+    --run-dir logs/R0001-S12345_logs --tag R0001-S12345
+```
+
+It owns one tcpdump, filtered to the Zabbix conversation, and tees it: every
+packet is written through to `<tag>_zabbix.pcap` byte for byte **and** decoded
+into one ground-truth record. The dedicated pcap and the log therefore come from
+the same packets and cannot disagree, which `capture_report.py` verifies by
+comparing their counts.
+
+What lands where, for one Zabbix packet:
+
+| File | Contents |
+|---|---|
+| `<tag>_zabbix.pcap` | the packet, in the Zabbix-only capture |
+| `<tag>.pcap` | the same packet, in the whole-wire capture (it is the union) |
+| `<tag>_knownzabbix.json` | one record: src/dst, ports, TCP flags, lengths, direction |
+| `<tag>_knownbenign.json` | the same record, in the holistic benign union |
+| `<tag>_alltraffic.json` | the same record, in the all-traffic union — once, never twice |
+| `<tag>.zabbix.meta.json` | the run's BPF filter, addresses, counts, and stop reason |
+
+**What counts as Zabbix traffic.** The agent runs *on* the honeypot, so a filter
+of "every packet involving the agent address" would match the entire capture.
+The filter is therefore the Zabbix addresses scoped to the Zabbix ports —
+`tcp and (host <server> or host <agent>) and (port 10050 or port 10051)` — which
+is what makes "involving Zabbix" mean the telemetry rather than everything the
+honeypot does. 10050 is the agent's passive checks and 10051 is the server side
+(active checks, `zabbix_sender`); add ports under `zabbix_capture.ports` in
+`config.yaml` if a Zabbix proxy or a non-default port is in play.
+
+**The attacker address is excluded.** `run2`'s covert operator impersonates the
+Zabbix service account, so packets from `addresses.attacker_ip` are the
+adversary's and must not be labeled as benign telemetry. They stay in the main
+pcap and are recorded by hand with `log_user.py`. Set
+`zabbix_capture.exclude_attacker: false` to fold them in anyway.
+
+If `config.yaml` has no Zabbix addresses, the logger disables itself, says so
+loudly, and writes `<tag>.zabbix.meta.json` with `enabled: false` and the reason,
+so the closing summary reports the gap instead of a run quietly lacking Zabbix
+ground truth. Re-run `SETUP.sh` to fix it.
+
+## One more decision worth knowing
+
+**Per-destination periodicity.** The beacon (60s), the real Zabbix stream (the
+agent's own interval, commonly 60s), and the healthcheck (60s) share a cadence by
+design. At a 15s span the 60s period
 spans four buckets, so timing features can resolve the rhythm — but only if
 periodicity is computed per destination rather than aggregated across all traffic
 in a bucket. Aggregated per bucket, the three 60s streams sum into a single

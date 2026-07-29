@@ -8,10 +8,15 @@ on its own, after the fact:
 
     ./.venv/bin/python3 capture_report.py logs/R0001-S12345_logs R0001-S12345
 
-Nothing here reads the packet payloads: the pcap is counted by walking record
+Nothing here reads the packet payloads: each pcap is counted by walking record
 headers, so the cost is independent of capture size. A short final record is
 reported as a truncated tail, which is the signature of a capture that was killed
 mid-write rather than shut down.
+
+The real Zabbix agent's stream is checked too, from the sidecar zabbix_log.py
+writes: whether the packet logger ran at all, what filter it used, and whether
+its dedicated pcap, its own log, and the benign/all-traffic unions agree on how
+many Zabbix packets there were.
 
 Exit status: 0 = every expected file is present and intact; 1 = something is
 missing, empty, truncated, or inconsistent; 2 = the report itself could not run.
@@ -90,9 +95,9 @@ def count_pcapng(path, size):
 
 
 def check_pcap(path, size):
-    """(status, detail) for the capture file."""
+    """(status, detail, packet_count) for a capture file."""
     if size <= 24:
-        return "EMPTY", f"0 packets, {human(size)}"
+        return "EMPTY", f"0 packets, {human(size)}", 0
     with open(path, "rb") as f:
         magic = f.read(4)
     try:
@@ -101,14 +106,14 @@ def check_pcap(path, size):
         elif magic == PCAPNG_MAGIC:
             packets, problem = count_pcapng(path, size)
         else:
-            return "UNKNOWN", f"unrecognized format (magic {magic.hex()}), {human(size)}"
+            return "UNKNOWN", f"unrecognized format (magic {magic.hex()}), {human(size)}", 0
     except OSError as e:
-        return "UNREAD", f"{e}, {human(size)}"
+        return "UNREAD", f"{e}, {human(size)}", 0
     if problem:
-        return "PARTIAL", f"{packets} packets then {problem}, {human(size)}"
+        return "PARTIAL", f"{packets} packets then {problem}, {human(size)}", packets
     if packets == 0:
-        return "EMPTY", f"0 packets, {human(size)}"
-    return "OK", f"{packets} packets, {human(size)}"
+        return "EMPTY", f"0 packets, {human(size)}", 0
+    return "OK", f"{packets} packets, {human(size)}", packets
 
 
 def check_ndjson(path, size):
@@ -148,6 +153,15 @@ def check_manifest(path, size):
     return "OK", f"finalized, {human(size)}", man
 
 
+def load_json(path):
+    """A JSON file, or None if it is absent, unreadable, or not valid JSON."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
@@ -182,16 +196,25 @@ def main():
         print(bar)
         return 1
 
+    # The Zabbix stream is real, not generated, so whether its files are expected
+    # is a property of the run: zabbix_log.py records that in its meta sidecar.
+    zmeta_name = f"{tag}.zabbix.meta.json"
+    zmeta = load_json(os.path.join(run_dir, zmeta_name))
+    zbx_on = bool(zmeta and zmeta.get("enabled"))
+
     # name, required, kind
     expected = [
-        (f"{tag}.pcap",                      True,  "pcap"),
-        (f"{tag}_knownbenign.json",          True,  "ndjson"),
-        (f"{tag}_knownuser.json",            False, "ndjson"),
-        (f"{tag}_alltraffic.json",           True,  "ndjson"),
-        (f"{tag}.{args.role}.manifest.json", True,  "manifest"),
+        (f"{tag}.pcap",                      True,   "pcap"),
+        (f"{tag}_knownbenign.json",          True,   "ndjson"),
+        (f"{tag}_knownuser.json",            False,  "ndjson"),
+        (f"{tag}_zabbix.pcap",               zbx_on, "pcap"),
+        (f"{tag}_knownzabbix.json",          False,  "ndjson"),
+        (f"{tag}_alltraffic.json",           True,   "ndjson"),
+        (f"{tag}.{args.role}.manifest.json", True,   "manifest"),
+        (zmeta_name,                         False,  "zmeta"),
     ]
 
-    problems, counts, manifest = [], {}, None
+    problems, warnings, counts, manifest = [], [], {}, None
     for name, required, kind in expected:
         path = os.path.join(run_dir, name)
         if not os.path.exists(path):
@@ -200,20 +223,31 @@ def main():
                 problems.append(f"{name} is missing")
             else:
                 print(f"    {name:<38} {'-':<8} not created (nothing logged)")
-            counts[kind] = 0
+            counts[name] = 0
             continue
         size = os.path.getsize(path)
         if kind == "pcap":
-            status, detail = check_pcap(path, size)
+            status, detail, counts[name] = check_pcap(path, size)
         elif kind == "ndjson":
             status, detail, counts[name] = check_ndjson(path, size)
+        elif kind == "zmeta":
+            status = "OK" if zmeta else "CORRUPT"
+            detail = ((f"zabbix capture {'enabled' if zbx_on else 'DISABLED'}, "
+                       f"{human(size)}") if zmeta else f"not valid JSON, {human(size)}")
         else:
             status, detail, manifest = check_manifest(path, size)
         print(f"    {name:<38} {status:<8} {detail}")
         if status != "OK":
-            problems.append(f"{name}: {status.lower()}")
+            # An empty Zabbix stream means the agent was quiet or the mirror is
+            # not carrying it: worth saying out loud, but it is not a broken file.
+            if status == "EMPTY" and "zabbix" in name:
+                warnings.append(f"{name} is empty")
+            else:
+                problems.append(f"{name}: {status.lower()}")
 
-    # alltraffic is the union of the other two logs, so the counts must add up
+    # alltraffic is the union of the benign and user logs, so the counts must add
+    # up. Zabbix records live inside knownbenign (and so inside alltraffic), which
+    # is what keeps this arithmetic true with the real Zabbix stream folded in.
     benign = counts.get(f"{tag}_knownbenign.json", 0)
     user = counts.get(f"{tag}_knownuser.json", 0)
     every = counts.get(f"{tag}_alltraffic.json", 0)
@@ -222,6 +256,42 @@ def main():
         print(f"[!] record mismatch: knownbenign({benign}) + knownuser({user})"
               f" != alltraffic({every})")
         problems.append("log record counts do not add up")
+
+    # ---------------------------------------------------------------- zabbix
+    zbx_packets = counts.get(f"{tag}_zabbix.pcap", 0)
+    zbx_records = counts.get(f"{tag}_knownzabbix.json", 0)
+    print(rule)
+    if zmeta is None:
+        print("[!] zabbix:           no meta file; the packet logger never ran for"
+              " this run")
+        warnings.append("no zabbix capture meta file")
+    elif not zbx_on:
+        print(f"[!] zabbix:           DISABLED -- {zmeta.get('reason', 'no reason given')}")
+        print("[!]                   this run has NO Zabbix ground truth;"
+              " re-run SETUP.sh")
+        warnings.append("zabbix capture was disabled for this run")
+    else:
+        print(f"[=] zabbix filter:    {zmeta.get('bpf_filter', '?')}")
+        print(f"[=] zabbix stream:    {zbx_packets} packets in {tag}_zabbix.pcap,"
+              f" {zbx_records} records in the logs")
+        if zmeta.get("ended"):
+            print(f"[=] zabbix logger:    stopped by {zmeta.get('stopped_by', '?')}"
+                  + (f", {zmeta['undecoded']} undecodable frame(s)"
+                     if zmeta.get("undecoded") else ""))
+        else:
+            print("[!] zabbix logger:    never finalized its meta file")
+            problems.append("zabbix logger did not finalize")
+        # Both come from the same tcpdump, one packet at a time, so they can only
+        # differ by the single record a hard kill can cut off mid-write.
+        if abs(zbx_packets - zbx_records) > 1:
+            print(f"[!] zabbix mismatch:  pcap({zbx_packets}) != logged({zbx_records})")
+            problems.append("zabbix pcap and log disagree on packet count")
+        # Every zabbix record is also a benign record; if it is not, the union is
+        # broken and the labels cannot be trusted.
+        if zbx_records > benign:
+            print(f"[!] zabbix union:     {zbx_records} zabbix records but only"
+                  f" {benign} in knownbenign")
+            problems.append("zabbix records are not folded into knownbenign")
 
     if manifest:
         gen_elapsed = manifest.get("elapsed_seconds")
@@ -234,6 +304,8 @@ def main():
                   + ", ".join(f"{k}={v}" for k, v in sorted(events.items())))
 
     print(rule)
+    if warnings:
+        print(f"[~] {len(warnings)} warning(s): " + "; ".join(warnings))
     if problems:
         print(f"[!] {len(problems)} problem(s): " + "; ".join(problems))
         print(f"[!] inspect {os.path.abspath(run_dir)} before trusting this run.")

@@ -16,7 +16,9 @@
 #
 # This unit runs the generator only; to capture a pcap for the run, start tcpdump
 # separately, or use run_capture.sh inside a tmux session for capture that
-# survives a disconnect.
+# survives a disconnect. That also means no Zabbix ground truth: the real Zabbix
+# agent's traffic is captured by zabbix_log.py, which run_capture.sh starts and
+# this unit does not.
 #
 # RuntimeMaxSec is a hard backstop; the timed baseline profile already exits at
 # run_seconds. The untimed profiles (run1, run2, selftest) never exit on their

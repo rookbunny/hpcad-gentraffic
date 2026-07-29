@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Orchestrate one capture: start tcpdump on the mirror, run the generator, then
-# stop both and verify what landed on disk. Everything for the run lands in one
-# directory, logs/<tag>_logs/, under the repository root, where the tag is the
-# run's R<run_id>-S<seed> stem: the pcap, the ground-truth logs, and the
-# manifest. A pointer to the active run (the tag) is written to .current_run in
-# the repository root so log_user.py can pick it up automatically.
+# Orchestrate one capture: start tcpdump on the mirror, start the Zabbix packet
+# logger, run the generator, then stop all three and verify what landed on disk.
+# Everything for the run lands in one directory, logs/<tag>_logs/, under the
+# repository root, where the tag is the run's R<run_id>-S<seed> stem: the pcap,
+# the ground-truth logs, and the manifest. A pointer to the active run (the tag)
+# is written to .current_run in the repository root so log_user.py can pick it up
+# automatically.
+#
+# ZABBIX: no Zabbix traffic is generated. The real zabbix-agent daemon on the
+# honeypot is the only source, and zabbix_log.py records what it actually sends,
+# packet by packet, into its own <tag>_zabbix.pcap and <tag>_knownzabbix.json
+# (also folded into the benign and all-traffic unions). It reads the Zabbix and
+# attacker addresses from config.yaml; if they are unset it says so loudly and
+# the run proceeds without Zabbix ground truth.
 #
 # STOPPING A RUN: the untimed profiles (run1, run2, selftest -- anything whose
 # run_seconds is null in config.yaml) run for as long as you want them to. Type
@@ -50,6 +58,7 @@ RUN_ID="$(printf '%04d' "$NEXT")"
 TAG="R${RUN_ID}-S${SEED}"
 RUN_DIR="$HERE/logs/${TAG}_logs"
 PCAP="${RUN_DIR}/${TAG}.pcap"
+ZBX_PCAP="${RUN_DIR}/${TAG}_zabbix.pcap"
 
 SECONDS=0        # bash counts the run for us; $SECONDS is the capture's length
 MAIN_PID=$$
@@ -58,6 +67,7 @@ STOP_SECONDS=""
 SUMMARY_DONE=0
 GEN_PID=""
 TCPDUMP_PID=""
+ZBX_PID=""
 READER_PID=""
 FAILURES=0
 
@@ -143,6 +153,13 @@ stop_children() {
         echo "[*] stopping tcpdump (pid $TCPDUMP_PID) and flushing the pcap..."
         stop_child "$TCPDUMP_PID" "tcpdump" 15 || FAILURES=$((FAILURES + 1))
     fi
+
+    # Last, so the Zabbix stream is recorded for the whole capture window. It
+    # signals its own tcpdump, drains the tail, and finalizes its meta file.
+    if [ -n "$ZBX_PID" ]; then
+        echo "[*] stopping the zabbix packet logger (pid $ZBX_PID)..."
+        stop_child "$ZBX_PID" "zabbix logger" 20 || FAILURES=$((FAILURES + 1))
+    fi
     sleep 0.5   # give the kernel a moment to land the final write
 }
 
@@ -187,6 +204,7 @@ echo "$TAG" > "$HERE/.current_run"
 echo "[*] run_id=$RUN_ID  tag=$TAG"
 echo "[*] dir   =$RUN_DIR"
 echo "[*] pcap  =$PCAP  (iface $IFACE)"
+echo "[*] zabbix=$ZBX_PCAP  (real agent traffic, captured separately)"
 echo "[*] seed  =$SEED  -> use this same seed AND run-id for gen.py on the promsvc VM"
 
 # capture everything on the mirror; full snaplen for payload / JA3 analysis
@@ -204,6 +222,15 @@ if [ ! -f "$PCAP" ]; then
     echo "[!] $STOP_REASON"
     exit 1
 fi
+
+# The real Zabbix agent's traffic, captured and labeled on its own. It owns the
+# tcpdump it needs (one process, so the dedicated pcap and the ground-truth
+# records are decoded from the same packets), and it self-disables with a loud
+# warning if config.yaml carries no Zabbix addresses -- a missing Zabbix stream
+# is worth a warning, but not worth throwing away an otherwise good capture.
+"$PYTHON" -u "$HERE/zabbix_log.py" --config "$HERE/config.yaml" --iface "$IFACE" \
+    --run-dir "$RUN_DIR" --tag "$TAG" --role honeypot < /dev/null &
+ZBX_PID=$!
 
 # -u so the generator's progress lines survive a redirect to a log file; stdin is
 # /dev/null because the exit watcher below owns the terminal

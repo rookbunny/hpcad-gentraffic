@@ -5,9 +5,17 @@ On disk both are folded into a single stem, the run tag R<run_id>-S<seed> (e.g.
 R0001-S12345). All output for a run lives in a per-run directory
 logs/<tag>_logs/ and every file inside is prefixed with the tag:
 
-  <tag>_knownbenign.json  scripted benign generator events
+  <tag>_knownbenign.json  scripted benign generator events + real Zabbix packets
   <tag>_knownuser.json    human/manual events (attacker actions, web browsing)
-  <tag>_alltraffic.json   union of both
+  <tag>_knownzabbix.json  the real Zabbix agent's traffic, one record per packet
+  <tag>_alltraffic.json   union of the benign and user classes
+
+A Zabbix record is written to knownzabbix (its own view of that stream) AND to
+knownbenign (the holistic union of everything known-benign) AND to alltraffic
+(the union of everything), one copy in each: knownzabbix is a subset of
+knownbenign, exactly as knownbenign is a subset of alltraffic, so
+knownbenign + knownuser == alltraffic still holds with the Zabbix stream folded
+in. Nothing is counted twice.
 
 Files are newline-delimited JSON (one record per line). Writes use a single
 os.write() to an O_APPEND descriptor, which is atomic for records below the
@@ -64,4 +72,19 @@ def write_user(run_dir, tag, record):
     os.makedirs(run_dir, exist_ok=True)
     record.setdefault("class", "user")
     atomic_append(_path(run_dir, tag, "knownuser"), record)
+    atomic_append(_path(run_dir, tag, "alltraffic"), record)
+
+def write_zabbix(run_dir, tag, record):
+    """One packet of real Zabbix traffic: its own log, plus both unions.
+
+    Zabbix is benign by class, so it belongs in knownbenign and therefore in
+    alltraffic; knownzabbix is the separate per-stream view (see the module
+    docstring). The generator never writes here -- no Zabbix traffic is
+    simulated; zabbix_log.py records what the real agent daemon actually sends.
+    """
+    os.makedirs(run_dir, exist_ok=True)
+    record.setdefault("class", "benign")
+    record.setdefault("source", "zabbix_agent")
+    atomic_append(_path(run_dir, tag, "knownzabbix"), record)
+    atomic_append(_path(run_dir, tag, "knownbenign"), record)
     atomic_append(_path(run_dir, tag, "alltraffic"), record)

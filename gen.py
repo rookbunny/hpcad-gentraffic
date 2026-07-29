@@ -21,11 +21,13 @@ SIGHUP (Ctrl-C, systemctl stop, a dropped ssh session, or the operator typing ex
 into run_capture.sh) and then finalizes the manifest with the actual elapsed time.
 --run-seconds overrides either way; --run-seconds 0 forces the untimed behavior.
 
-Not generated here: the C2 beacon (hand-run) and manual web browsing. Those are
-the anomalous / human streams, recorded via log_user.py.
+Not generated here: the C2 beacon (hand-run) and manual web browsing, which are
+the anomalous / human streams, recorded via log_user.py; and Zabbix, which is
+never simulated -- the real zabbix-agent daemon on the honeypot is the only
+source of that stream and zabbix_log.py captures it at the packet level.
 """
 
-import argparse, hashlib, json, os, random, signal, smtplib, ssl, subprocess, sys, threading, time
+import argparse, hashlib, json, os, random, signal, smtplib, ssl, sys, threading, time
 import urllib.request
 from datetime import datetime, timezone
 
@@ -196,22 +198,6 @@ def proc_chat_ws(ctx, p):
             ctx.log("chat_ws", "connect", ok=False, url=url, err=str(e))
             interruptible_sleep(ctx.stop, 5)  # backoff before retry
 
-def proc_zabbix(ctx, p):
-    """Off by default; the real Zabbix agent daemon normally provides this stream."""
-    rng = random.Random(derive_seed(ctx.seed, "zabbix"))
-    ep = ctx.ep
-    while not ctx.stop.is_set():
-        if not interruptible_sleep(ctx.stop, jittered(rng, p["period"], p["jitter"], p["floor"])):
-            break
-        try:
-            subprocess.run(
-                ["zabbix_sender", "-z", ep["zabbix_server"], "-s", ep["zabbix_host"],
-                 "-k", "desktop.heartbeat", "-o", str(int(time.time()))],
-                capture_output=True, timeout=8, check=False)
-            ctx.log("zabbix", "sender", ok=True, server=ep["zabbix_server"])
-        except Exception as e:
-            ctx.log("zabbix", "sender", ok=False, err=str(e))
-
 def proc_noop(ctx, p):
     rng = random.Random(derive_seed(ctx.seed, "noop"))
     while not ctx.stop.is_set():
@@ -222,8 +208,11 @@ def proc_noop(ctx, p):
 PROCS = {
     "healthcheck": proc_healthcheck, "prom_scrape": proc_prom_scrape,
     "email": proc_email, "noaa": proc_noaa, "chat_ws": proc_chat_ws,
-    "zabbix": proc_zabbix, "noop": proc_noop,
+    "noop": proc_noop,
 }
+# No Zabbix process: Zabbix traffic is never simulated here. The real
+# zabbix-agent daemon on the honeypot is the only source, and zabbix_log.py
+# captures and labels it at the packet level (see README, "Zabbix").
 
 # ------------------------------------------------------------------ main
 
@@ -266,8 +255,6 @@ def main():
     selected = []
     for name in prof["processes"]:
         pcfg = cfg["processes"][name]
-        if name == "zabbix" and not pcfg.get("enabled_default", False):
-            continue
         host = pcfg.get("host", "honeypot")
         if host in (args.role, "any") or args.role == "any":
             selected.append(name)
@@ -282,9 +269,11 @@ def main():
         "timed": run_seconds is not None,
         "started": now_iso(), "processes": {n: cfg["processes"][n] for n in selected},
         "note": ("C2 beacon + manual browsing are not generated here; they are "
-                 "recorded via log_user.py. If the real Zabbix agent daemon's "
-                 "active checks are running, that Zabbix stream is present but "
-                 "not logged here."),
+                 "recorded via log_user.py. Zabbix is not generated either: the "
+                 "real zabbix-agent daemon is the only source, and zabbix_log.py "
+                 "captures it per packet into <tag>_zabbix.pcap and "
+                 "<tag>_knownzabbix.json, folded into the benign and all-traffic "
+                 "unions."),
     }
     man_path = os.path.join(run_dir, f"{tag}.{args.role}.manifest.json")
     with open(man_path, "w") as f:

@@ -26,8 +26,18 @@ read -rp "Chat WS port [8765]: " CHAT_PORT; CHAT_PORT=${CHAT_PORT:-8765}
 read -rp "Healthcheck server IP: " HC_IP
 read -rp "Healthcheck port [8080]: " HC_PORT; HC_PORT=${HC_PORT:-8080}
 read -rp "node_exporter port [9100]: " NE_PORT; NE_PORT=${NE_PORT:-9100}
-read -rp "Zabbix server IP (blank if using the real agent daemon) []: " ZBX_IP; ZBX_IP=${ZBX_IP:-}
-read -rp "Zabbix host name [honeypot-hpc-01]: " ZBX_HOST; ZBX_HOST=${ZBX_HOST:-honeypot-hpc-01}
+
+# Addresses used to attribute packets, not to generate traffic. No Zabbix
+# traffic is simulated: the real zabbix-agent daemon is the only source, and
+# these two addresses are what zabbix_log.py filters its packet capture on. The
+# attacker address is excluded from that filter, so an operator impersonating
+# the Zabbix service account is never labeled as benign telemetry.
+echo
+echo "Zabbix / attacker addresses (packet attribution; no Zabbix is simulated)."
+read -rp "Zabbix server IP: " ZBX_SERVER_IP
+read -rp "Zabbix agent IP (the honeypot itself) [${HP_IP}]: " ZBX_AGENT_IP
+ZBX_AGENT_IP=${ZBX_AGENT_IP:-$HP_IP}
+read -rp "Attacker IP (operator/C2 source; excluded from the Zabbix filter): " ATTACKER_IP
 
 # substitution done in Python so passwords with shell/sed metacharacters are safe
 IMAP_HOST="$MAIL_IP" SMTP_HOST="$MAIL_IP" IMAP_PORT="$IMAP_PORT" IMAP_USER="$IMAP_USER" \
@@ -35,13 +45,14 @@ IMAP_PASS="$IMAP_PASS" SMTP_PORT="$SMTP_PORT" \
 CHAT_WS_URL="ws://${CHAT_IP}:${CHAT_PORT}" \
 HEALTHCHECK_URL="http://${HC_IP}:${HC_PORT}/health" \
 NODE_EXPORTER_URL="http://${HP_IP}:${NE_PORT}/metrics" \
-ZABBIX_SERVER="$ZBX_IP" ZABBIX_HOST="$ZBX_HOST" \
+ZABBIX_SERVER_IP="$ZBX_SERVER_IP" ZABBIX_AGENT_IP="$ZBX_AGENT_IP" \
+ATTACKER_IP="$ATTACKER_IP" \
 python3 - "$EXAMPLE" "$OUT" <<'PY'
 import os, sys
 example, out = sys.argv[1], sys.argv[2]
 tokens = ["IMAP_HOST", "IMAP_PORT", "IMAP_USER", "IMAP_PASS", "SMTP_HOST",
           "SMTP_PORT", "CHAT_WS_URL", "HEALTHCHECK_URL", "NODE_EXPORTER_URL",
-          "ZABBIX_SERVER", "ZABBIX_HOST"]
+          "ZABBIX_SERVER_IP", "ZABBIX_AGENT_IP", "ATTACKER_IP"]
 s = open(example).read()
 for t in tokens:
     s = s.replace("__%s__" % t, os.environ.get(t, ""))

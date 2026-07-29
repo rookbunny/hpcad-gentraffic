@@ -23,8 +23,6 @@ endpoints:
   chat_ws_url:       "__CHAT_WS_URL__"      # ws_echo_server.py on the chat VM
   healthcheck_url:   "__HEALTHCHECK_URL__"  # health_server.py on the service VM
   node_exporter_url: "__NODE_EXPORTER_URL__" # node_exporter ON the honeypot (:9100)
-  zabbix_server:     "__ZABBIX_SERVER__"    # only used if the zabbix process is enabled
-  zabbix_host:       "__ZABBIX_HOST__"      # must match the host name registered in Zabbix
 
   # --- external (real) ---
   # Rotating public space-weather products; sizes span KB..16MB for a natural
@@ -37,6 +35,29 @@ endpoints:
     - "https://services.swpc.noaa.gov/json/enlil_time_series.json"
     - "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
     - "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
+
+# Range addresses used to ATTRIBUTE packets, never to generate traffic. Written
+# by SETUP.sh; read by zabbix_log.py to build its capture filter.
+addresses:
+  zabbix_server_ip: "__ZABBIX_SERVER_IP__"  # the Zabbix server that polls the agent
+  zabbix_agent_ip:  "__ZABBIX_AGENT_IP__"   # the honeypot, where zabbix-agent runs
+  attacker_ip:      "__ATTACKER_IP__"       # operator / C2 source address
+
+# Packet-level capture of the REAL Zabbix agent's traffic. No Zabbix traffic is
+# simulated anywhere in this repository; the zabbix-agent daemon on the honeypot
+# is the only source. zabbix_log.py captures it into <tag>_zabbix.pcap and
+# <tag>_knownzabbix.json and folds those records into <tag>_knownbenign.json and
+# <tag>_alltraffic.json (one copy in each). See README, "Zabbix".
+zabbix_capture:
+  # The agent runs ON the honeypot, so filtering on its address alone would match
+  # the entire capture; the Zabbix ports are what scope the filter to Zabbix.
+  # 10050 = agent passive checks, 10051 = server (active checks / zabbix_sender).
+  # Add a port here if a Zabbix proxy or a non-default port is in use.
+  ports: [10050, 10051]
+  # Exclude attacker_ip from the Zabbix filter. run2's covert operator
+  # impersonates the Zabbix service account, and those packets are the
+  # adversary's: they stay in the main pcap and are logged with log_user.py.
+  exclude_attacker: true
 
 # Cadence table. period/jitter/duration in SECONDS. host = which --role runs it.
 # floor clamps the sampled interval so jitter can never drive it sub-zero.
@@ -73,14 +94,8 @@ processes:
     period: 50
     jitter: 10
     floor: 5
-  zabbix:
-    host: honeypot
-    kind: periodic
-    period: 60
-    jitter: 10
-    floor: 10
-    enabled_default: false   # off: the real Zabbix agent daemon provides this
-                             # stream. See README, "Zabbix decision".
+  # There is deliberately no zabbix process here. That stream is real, not
+  # generated: see the zabbix_capture section above.
   noop:
     host: any
     kind: periodic           # self-test only; never enable in a real profile

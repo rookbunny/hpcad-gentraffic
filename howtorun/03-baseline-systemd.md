@@ -9,6 +9,7 @@
 
 - The unit is a template. The instance name after `@` is passed straight through to the generator as the profile via `%i`. Starting `Honeypot_gentraffic@baseline` runs the `baseline` profile.
 - The unit runs the generator only. It does not start tcpdump, so it does not produce a pcap on its own.
+- It also does not start `zabbix_log.py`, so a service-only baseline has no Zabbix pcap and no Zabbix records. The real Zabbix agent keeps sending either way, but nothing captures or labels that stream. Use `run_capture.sh` for any baseline that needs Zabbix ground truth, which is any baseline the models will train on.
 - `RuntimeMaxSec` is set to 5 hours as a hard backstop. The driver already exits at `run_seconds`, so the backstop only matters if the driver hangs.
 - `Restart=no`, so the run does not relaunch after the window ends.
 
@@ -73,6 +74,7 @@ The service covers the honeypot only. The monitoring VM still runs its scrape pr
 - `journalctl` shows the generator started, printed a tag, and exited cleanly near the 4 hour mark.
 - The manifest under `logs/<tag>_logs/` reports `expected_buckets` of 960 and populated `event_counts`.
 - If a pcap is needed, it was produced by `run_capture.sh`, not by the service.
+- If Zabbix ground truth is needed, the run went through `run_capture.sh`: the service produces none.
 
 ---
 

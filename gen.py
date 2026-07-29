@@ -16,11 +16,16 @@ reproduces the whole run across all hosts, because each process is seeded from
     python3 gen.py --profile baseline --role honeypot --seed 13370
     python3 gen.py --profile baseline --role promsvc  --seed 13370 --run-id 0001
 
+A profile whose run_seconds is null has no timer: it runs until SIGINT, SIGTERM or
+SIGHUP (Ctrl-C, systemctl stop, a dropped ssh session, or the operator typing exit
+into run_capture.sh) and then finalizes the manifest with the actual elapsed time.
+--run-seconds overrides either way; --run-seconds 0 forces the untimed behavior.
+
 Not generated here: the C2 beacon (hand-run) and manual web browsing. Those are
 the anomalous / human streams, recorded via log_user.py.
 """
 
-import argparse, hashlib, json, os, random, smtplib, ssl, subprocess, sys, threading, time
+import argparse, hashlib, json, os, random, signal, smtplib, ssl, subprocess, sys, threading, time
 import urllib.request
 from datetime import datetime, timezone
 
@@ -231,7 +236,8 @@ def main():
     ap.add_argument("--seed", type=int, default=None,
                     help="master seed; omit for a fresh random 5-digit one (RESEED PER RUN)")
     ap.add_argument("--run-seconds", type=int, default=None,
-                    help="override the profile's run length")
+                    help="override the profile's run length; 0 means run until "
+                         "stopped (SIGINT/SIGTERM)")
     ap.add_argument("--base", default=".",
                     help="repo root; run dirs are created under <base>/logs/<tag>_logs/")
     ap.add_argument("--run-id", default=None)
@@ -244,7 +250,12 @@ def main():
     if args.profile not in cfg["profiles"]:
         sys.exit(f"unknown profile {args.profile!r}; have {list(cfg['profiles'])}")
     prof = cfg["profiles"][args.profile]
-    run_seconds = args.run_seconds or prof["run_seconds"]
+    # A null/absent/<=0 run_seconds means "no timer": run until a signal arrives
+    # (run_capture.sh sends one when the operator types exit; systemctl stop and
+    # Ctrl-C do the same). Timed profiles still exit on their own at the window end.
+    run_seconds = args.run_seconds if args.run_seconds is not None else prof.get("run_seconds")
+    if run_seconds is not None and run_seconds <= 0:
+        run_seconds = None
     seed = args.seed if args.seed is not None else random.SystemRandom().randint(10000, 99999)
     run_id = args.run_id or logio.next_run_id(args.base)
     tag = logio.tag_for(run_id, seed)
@@ -267,7 +278,8 @@ def main():
     manifest = {
         "run_id": run_id, "profile": args.profile, "role": args.role,
         "seed": seed, "bucket_span_s": 15, "run_seconds": run_seconds,
-        "expected_buckets": run_seconds // 15,
+        "expected_buckets": (run_seconds // 15) if run_seconds else None,
+        "timed": run_seconds is not None,
         "started": now_iso(), "processes": {n: cfg["processes"][n] for n in selected},
         "note": ("C2 beacon + manual browsing are not generated here; they are "
                  "recorded via log_user.py. If the real Zabbix agent daemon's "
@@ -278,12 +290,28 @@ def main():
     with open(man_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
+    window = (f"{run_seconds}s ({run_seconds//15} buckets @15s)" if run_seconds
+              else "until stopped (no timer)")
     print(f"[+] run_id={run_id} tag={tag}")
-    print(f"[+] role={args.role} seed={seed} run={run_seconds}s "
-          f"({run_seconds//15} buckets @15s)")
+    print(f"[+] role={args.role} seed={seed} run={window}")
     print(f"[+] processes: {', '.join(selected) or '(none for this role)'}")
     print(f"[+] logs -> {os.path.abspath(run_dir)}")
 
+    # Signals only set the stop event; they never raise, so a second Ctrl-C while
+    # the run is winding down cannot interrupt the manifest write below.
+    stopped_by = {"reason": "run_seconds"}
+    def on_signal(signum, _frame):
+        if not stop.is_set():
+            stopped_by["reason"] = signal.Signals(signum).name
+            print(f"\n[!] {stopped_by['reason']} received; stopping and finalizing")
+        stop.set()
+    stop_signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):        # a dropped ssh session must not lose the run
+        stop_signals.append(signal.SIGHUP)
+    for sig in stop_signals:
+        signal.signal(sig, on_signal)
+
+    started = time.time()
     threads = []
     for name in selected:
         t = threading.Thread(target=PROCS[name], args=(ctx, cfg["processes"][name]),
@@ -291,18 +319,29 @@ def main():
         t.start(); threads.append(t)
 
     try:
-        interruptible_sleep(stop, run_seconds)
+        if run_seconds is None:
+            while not stop.wait(1.0):   # slices so the handler runs promptly
+                pass
+        else:
+            interruptible_sleep(stop, run_seconds)
     except KeyboardInterrupt:
+        stopped_by["reason"] = "SIGINT"
         print("\n[!] interrupted; stopping early")
     stop.set()
     for t in threads:
         t.join(timeout=10)
 
+    elapsed = round(time.time() - started, 1)
     manifest["ended"] = now_iso()
+    manifest["stopped_by"] = stopped_by["reason"]
+    manifest["elapsed_seconds"] = elapsed
+    manifest["actual_buckets"] = int(elapsed // 15)
     manifest["event_counts"] = ctx.counts()
     with open(man_path, "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"[+] done. event counts: {ctx.counts()}")
+    print(f"[+] done after {elapsed}s ({int(elapsed // 15)} buckets @15s), "
+          f"stopped by {stopped_by['reason']}")
+    print(f"[+] event counts: {ctx.counts()}")
     print(f"[+] manifest -> {man_path}")
 
 if __name__ == "__main__":

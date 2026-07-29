@@ -18,23 +18,32 @@
 
 ## Part A. Generator and logging wiring test
 
-The `selftest` profile runs the `noop` process for 6 seconds. It exercises run id assignment, tag folding, directory creation, the manifest, and the append-only logs without touching real endpoints.
+The `selftest` profile runs the `noop` process, which touches no real endpoint. It exercises run id assignment, tag folding, directory creation, the manifest, the append-only logs, and the stop-and-verify path. It has no timer, so it also proves out the way the real runs are stopped.
 
-1. Run the short profile end to end, including tcpdump, on the capture host.
+1. Run the profile end to end, including tcpdump, on the capture host.
 
    ```bash
    sudo ./run_capture.sh selftest ens19
    ```
 
-2. Confirm the run directory and its contents.
+2. Let it run for half a minute or so, then stop it by typing `exit` and pressing Enter (Ctrl-C also works).
+
+   ```bash
+   exit
+   ```
+
+   The closing summary is the thing being tested here. It should list `<tag>.pcap`, `<tag>_knownbenign.json`, `<tag>_alltraffic.json`, and `<tag>.honeypot.manifest.json`, each `OK` with a non-zero count, report roughly the elapsed time you let it run, and end with `all expected files were written successfully`. If it names a `MISSING`, `EMPTY`, or `PARTIAL` file instead, fix that before any real capture: the same check runs at the end of every run.
+
+3. Confirm the run directory and the run pointer.
 
    ```bash
    ls logs/R*-S*_logs/
+   cat .current_run
    ```
 
-   A healthy result contains `<tag>.pcap`, `<tag>_knownbenign.json`, `<tag>_alltraffic.json`, and `<tag>.honeypot.manifest.json`, and `.current_run` at the repository root holds the active tag.
+   `.current_run` at the repository root holds the active tag, which is what `log_user.py` picks up.
 
-3. Confirm scripted events were written and attributed.
+4. Confirm scripted events were written and attributed.
 
    ```bash
    tail logs/R*-S*_logs/*_knownbenign.json
@@ -80,6 +89,7 @@ Manual web browsing originates on the honeypot and exits to an external target. 
 ## Verification checklist
 
 - Run directory, pcap, logs, and manifest are all created.
+- Typing `exit` stops the capture, and the closing summary ends with `all expected files were written successfully`.
 - `.current_run` holds the active tag during a `run_capture.sh` capture.
 - Companion endpoints respond and produce `ok=true` benign records under a real profile.
 - Proxied browsing appears on the mirror as flows sourced from the honeypot.

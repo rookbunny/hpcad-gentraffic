@@ -90,16 +90,21 @@ processes:
 
 # A profile = a run length + the set of processes that fire during it.
 # The C2 beacon and manual web browsing are NOT here (hand-run / manual).
+#
+# run_seconds: null means NO TIMER. The run continues until you stop it (type
+# "exit" into the terminal running run_capture.sh, or send SIGINT/SIGTERM), and
+# the manifest records the actual elapsed time and bucket count. Only baseline is
+# still timed, because it is the unattended 4h training capture.
 profiles:
   baseline:
     run_seconds: 14400        # 4h  = 960 buckets @ 15s
     processes: [chat_ws, healthcheck, email, noaa, prom_scrape]
   run1:                       # opportunistic run: benign scaffold under the loud attack
-    run_seconds: 1200         # 20m = 80 buckets (cap)
+    run_seconds: null         # no timer; stop it by hand
     processes: [chat_ws, healthcheck, email, prom_scrape]
   run2:                       # covert run: benign scaffold + optional live browsing as cover
-    run_seconds: 2400         # 40m = 160 buckets
+    run_seconds: null         # no timer; stop it by hand
     processes: [chat_ws, healthcheck, email, noaa, prom_scrape]
   selftest:
-    run_seconds: 6
+    run_seconds: null         # no timer; stop it by hand
     processes: [noop]

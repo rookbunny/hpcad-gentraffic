@@ -157,11 +157,42 @@ the whole run because each process is seeded from `(seed, process_name)`.
 
 Profiles (all captured at a 15s bucket span):
 
-| Profile | Window | Buckets | Notes |
-|---|---|---|---|
-| `baseline` | 4h | 960 | unsupervised training data; long on purpose for tail estimation |
-| `run1` | 20m | 80 | opportunistic; benign scaffold under the loud attack |
-| `run2` | 40m | 160 | covert dwell; run live browsing as cover during this window |
+| Profile | Window | Notes |
+|---|---|---|
+| `baseline` | 4h (timed, 960 buckets) | unsupervised training data; long on purpose for tail estimation |
+| `run1` | until you stop it | opportunistic; benign scaffold under the loud attack |
+| `run2` | until you stop it | covert dwell; run live browsing as cover during this window |
+| `selftest` | until you stop it | wiring test; `noop` process only, touches no real endpoint |
+
+## Stopping a run
+
+`baseline` is timed and ends on its own. Every other profile has `run_seconds:
+null` in the config and runs for as long as the engagement needs, so run lengths
+can vary from capture to capture. To stop one, type `exit` (Ctrl-C also works) in
+the terminal running `run_capture.sh`:
+
+```bash
+exit
+```
+
+Either way the generator finalizes its manifest with the real elapsed time,
+tcpdump flushes, and a summary reports whether every expected file was written,
+how many packets and records are in each, and how long the capture ran. That
+same summary prints on any other exit too -- a SIGTERM, a script error, a closed
+stdin -- so a run never ends silently. The exit status is non-zero if anything is
+missing, empty, or truncated.
+
+The check is `capture_report.py`, which can also be run later against any
+finished run:
+
+```bash
+./.venv/bin/python3 capture_report.py logs/R0001-S12345_logs R0001-S12345
+```
+
+An existing `config.yaml` predates the untimed profiles, so re-run `SETUP.sh`, or
+set `run_seconds: null` for `run1`, `run2`, and `selftest` by hand. A profile
+that still carries a number keeps stopping at that number; `--run-seconds` on
+`gen.py` overrides either way.
 
 ## Long runs (systemd)
 

@@ -41,7 +41,9 @@
 
    This creates a matching `logs/<tag>_logs/` on the monitoring VM holding that host's benign log and manifest.
 
-3. Let both hosts run to the end of the 4 hour window. The driver exits on its own at `run_seconds`, stops tcpdump, and finalizes the manifest with event counts.
+3. Let both hosts run to the end of the 4 hour window. `baseline` is the one profile that is still timed, so the driver exits on its own at `run_seconds`, stops tcpdump, and finalizes the manifest with event counts. To cut a baseline short, type `exit` into the terminal running `run_capture.sh` (Ctrl-C also works); it finalizes the same way and the manifest records the shorter `elapsed_seconds`.
+
+4. Read the closing summary either way. It lists every expected file with its packet or record count, how long the capture ran, and whether anything is missing or truncated; the script exits non-zero if so.
 
 ## Reseeding
 

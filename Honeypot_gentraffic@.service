@@ -18,9 +18,13 @@
 # separately, or use run_capture.sh inside a tmux session for capture that
 # survives a disconnect.
 #
-# RuntimeMaxSec is a hard backstop; the driver already exits at run_seconds.
-# Adjust the two paths if the repository is deployed somewhere other than
-# /opt/gunderson.
+# RuntimeMaxSec is a hard backstop; the timed baseline profile already exits at
+# run_seconds. The untimed profiles (run1, run2, selftest) never exit on their
+# own, so under this unit they run until RuntimeMaxSec or a "systemctl stop".
+# Either way the SIGTERM reaches gen.py, which stops its threads and finalizes
+# the manifest with the real elapsed time -- but the unit captures no pcap, so
+# prefer run_capture.sh in tmux for those. Adjust the two paths if the repository
+# is deployed somewhere other than /opt/gunderson.
 
 [Unit]
 Description=Honeypot benign traffic generator (%i)

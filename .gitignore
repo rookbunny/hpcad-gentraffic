@@ -1,5 +1,6 @@
-# generated config holds a password and internal addresses
-config.yaml
+# generated config holds a password and internal addresses. The template it is
+# generated from (config/config.example.yaml) stays tracked.
+config/config.yaml
 
 # per-run capture directories, ground-truth logs, pcaps. The directory itself,
 # its README and the naming template are tracked, so the expected layout is
@@ -10,9 +11,9 @@ logs/*
 !logs/README.md
 !logs/_TEMPLATE_R0000-S00000_logs/
 
-# run pointer and optional seed env file
+# run pointer (repo root) and the systemd unit's optional seed env file
 .current_run
-run.env
+systemd/run.env
 
 # python venv and caches
 .venv/

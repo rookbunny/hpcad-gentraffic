@@ -1,5 +1,8 @@
 """Append-only ground-truth logging.
 
+Imported by every writer in this directory (log_user.py and the two packet taps)
+and by generator/gen.py, which is the only consumer outside groundtruth/.
+
 A run is identified by a sequential run id (0001, 0002, ...) and a 5-digit seed.
 On disk both are folded into a single stem, the run tag R<run_id>-S<seed> (e.g.
 R0001-S12345). All output for a run lives in a per-run directory
@@ -16,7 +19,7 @@ holistic union, so
 
     knownbenign + knownuser + attacker_traffic == alltraffic
 
-holds exactly, and capture_report.py checks it. Nothing is counted twice.
+holds exactly, and capture/capture_report.py checks it. Nothing is counted twice.
 
 The per-stream files sit inside that arithmetic differently, and the difference
 is the point:
@@ -93,7 +96,7 @@ def write_zabbix(run_dir, tag, record):
     Zabbix is benign by class, so it belongs in knownbenign and therefore in
     alltraffic; knownzabbix is the separate per-stream view (see the module
     docstring). The generator never writes here -- no Zabbix traffic is
-    simulated; zabbix_log.py records what the real agent daemon actually sends.
+    simulated; zabbix_log.py next door records what the real agent daemon sends.
     """
     os.makedirs(run_dir, exist_ok=True)
     record.setdefault("class", "benign")

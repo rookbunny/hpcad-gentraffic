@@ -3,7 +3,7 @@
 chat_ws keepalive has a real endpoint without standing up Mattermost.
 
     pip install websockets
-    python3 ws_echo_server.py 0.0.0.0 8765
+    python3 companions/ws_echo_server.py 0.0.0.0 8765
 """
 import sys
 from websockets.sync.server import serve

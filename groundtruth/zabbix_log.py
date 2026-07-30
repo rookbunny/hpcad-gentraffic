@@ -16,8 +16,9 @@ process records it, next to the run's own files but never mixed into them:
 A single tcpdump feeds all of that. Its pcap stream arrives on a pipe; every
 packet is written through to <tag>_zabbix.pcap byte for byte AND decoded into one
 record, so the dedicated pcap and the log can never disagree about what was seen.
-That loop, and the header decoding, live in pcaptap.py, shared with
-attacker_log.py. The run's main tcpdump keeps its own copy of these packets,
+That loop, and the header decoding, live in pcaptap.py, its sibling here in
+groundtruth/, shared with attacker_log.py. The run's main tcpdump keeps its own
+copy of these packets,
 because that capture is the whole wire: the Zabbix stream is present there exactly
 once, the same way a Zabbix record appears exactly once in <tag>_alltraffic.json.
 
@@ -30,16 +31,22 @@ attacker address is excluded: run2's covert operator impersonates the Zabbix
 service account, and those packets are the adversary's, not benign telemetry.
 They are captured and labeled by attacker_log.py instead.
 
-run_capture.sh starts this alongside the run's main tcpdump and stops it with
-SIGTERM. It also runs by hand against an existing run directory:
+capture/run_capture.sh starts this alongside the run's main tcpdump and stops it
+with SIGTERM. It also runs by hand against an existing run directory:
 
-    sudo ./.venv/bin/python3 zabbix_log.py --iface ens19 \
+    sudo ./.venv/bin/python3 groundtruth/zabbix_log.py --iface ens19 \
         --run-dir logs/R0001-S12345_logs --tag R0001-S12345
 """
 
 import argparse, json, os, sys
 
 import logio, pcaptap
+
+# The generated config lives in config/ at the repository root, one level up from
+# this file, so the default works from any working directory.
+DEFAULT_CONFIG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "config.yaml")
 
 # Agent passive checks arrive on 10050; the agent's active checks and
 # zabbix_sender reach the server on 10051. Override in config.yaml when a proxy
@@ -142,13 +149,14 @@ def write_disabled_meta(args, addresses, ports, reason):
                    "reason": reason, "iface": args.iface, "addresses": addresses,
                    "ports": ports, "started": pcaptap.now_iso()}, f, indent=2)
     print(f"[!] Zabbix capture DISABLED: {reason}")
-    print(f"[!] this run will have NO Zabbix ground truth. Re-run SETUP.sh to set "
-          f"the Zabbix addresses.")
+    print(f"[!] this run will have NO Zabbix ground truth. Re-run config/SETUP.sh "
+          f"to set the Zabbix addresses.")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help="generated config; defaults to <repo>/config/config.yaml")
     ap.add_argument("--iface", required=True,
                     help="interface carrying the mirror copy, e.g. ens19")
     ap.add_argument("--run-dir", required=True,

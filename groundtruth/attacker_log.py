@@ -36,16 +36,22 @@ no record of their own; they now land here, labeled as the adversary's.
 An empty attacker stream is meaningful, not a failure: it is what a clean baseline
 should look like, and it is evidence the baseline really is clean.
 
-run_capture.sh starts this alongside the run's main tcpdump and stops it with
-SIGTERM. It also runs by hand against an existing run directory:
+capture/run_capture.sh starts this alongside the run's main tcpdump and stops it
+with SIGTERM. It also runs by hand against an existing run directory:
 
-    sudo ./.venv/bin/python3 attacker_log.py --iface ens19 \
+    sudo ./.venv/bin/python3 groundtruth/attacker_log.py --iface ens19 \
         --run-dir logs/R0001-S12345_logs --tag R0001-S12345
 """
 
 import argparse, ipaddress, json, os, sys
 
 import logio, pcaptap
+
+# The generated config lives in config/ at the repository root, one level up from
+# this file, so the default works from any working directory.
+DEFAULT_CONFIG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "config.yaml")
 
 
 # ------------------------------------------------------------------- filter
@@ -152,12 +158,13 @@ def write_disabled_meta(args, addresses, reason):
                    "started": pcaptap.now_iso()}, f, indent=2)
     print(f"[!] ATTACKER capture DISABLED: {reason}")
     print(f"[!] this run will have NO attacker ground truth, in any run type. "
-          f"Re-run SETUP.sh to set the attacker address.")
+          f"Re-run config/SETUP.sh to set the attacker address.")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help="generated config; defaults to <repo>/config/config.yaml")
     ap.add_argument("--iface", required=True,
                     help="interface carrying the mirror copy, e.g. ens19")
     ap.add_argument("--run-dir", required=True,

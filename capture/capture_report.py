@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Verify and summarize what a capture actually wrote to disk.
 
-run_capture.sh calls this on every exit path -- the operator typing exit, a
-signal, a script failure -- so a run never ends without saying whether its files
-landed, how much is in each one, and how long the capture ran. It is also useful
-on its own, after the fact:
+run_capture.sh, its sibling in capture/, calls this on every exit path -- the
+operator typing exit, a signal, a script failure -- so a run never ends without
+saying whether its files landed, how much is in each one, and how long the capture
+ran. It is also useful on its own, after the fact:
 
-    ./.venv/bin/python3 capture_report.py logs/R0001-S12345_logs R0001-S12345
+    ./.venv/bin/python3 capture/capture_report.py logs/R0001-S12345_logs R0001-S12345
 
 Nothing here reads the packet payloads: each pcap is counted by walking record
 headers, so the cost is independent of capture size. A short final record is
 reported as a truncated tail, which is the signature of a capture that was killed
 mid-write rather than shut down.
 
-The two per-stream packet taps are checked too, from the sidecars zabbix_log.py
-and attacker_log.py write: whether each logger ran at all, what filter it used,
+The two per-stream packet taps are checked too, from the sidecars
+groundtruth/zabbix_log.py and groundtruth/attacker_log.py write: whether each
+logger ran at all, what filter it used,
 and whether its dedicated pcap, its own log, and the unions it joins agree on how
 many packets there were. A disabled ATTACKER tap is a problem rather than a
 warning: attacker ground truth is expected in every run, so its absence means the
@@ -286,7 +287,7 @@ def main():
     elif not zbx_on:
         print(f"[!] zabbix:           DISABLED -- {zmeta.get('reason', 'no reason given')}")
         print("[!]                   this run has NO Zabbix ground truth;"
-              " re-run SETUP.sh")
+              " re-run config/SETUP.sh")
         warnings.append("zabbix capture was disabled for this run")
     else:
         print(f"[=] zabbix filter:    {zmeta.get('bpf_filter', '?')}")
@@ -325,7 +326,7 @@ def main():
     elif not atk_on:
         print(f"[!] attacker:         DISABLED -- {ameta.get('reason', 'no reason given')}")
         print("[!]                   this run has NO attacker ground truth;"
-              " re-run SETUP.sh")
+              " re-run config/SETUP.sh")
         problems.append("attacker capture was disabled for this run")
     else:
         print(f"[=] attacker filter:  {ameta.get('bpf_filter', '?')}")

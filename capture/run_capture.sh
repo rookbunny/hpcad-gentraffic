@@ -5,25 +5,30 @@
 # Everything for the run lands in one directory, logs/<tag>_logs/, under the
 # repository root, where the tag is the run's R<run_id>-S<seed> stem: the pcap,
 # the ground-truth logs, and the manifest. A pointer to the active run (the tag)
-# is written to .current_run in the repository root so log_user.py can pick it up
-# automatically.
+# is written to .current_run in the repository root so groundtruth/log_user.py can
+# pick it up automatically.
+#
+# This script lives in capture/ but every path it touches is relative to the
+# repository root one level up (ROOT below): logs/, .current_run, the .venv, the
+# config, and the three programs it starts, which live in generator/ and
+# groundtruth/.
 #
 # ZABBIX: no Zabbix traffic is generated. The real zabbix-agent daemon on the
-# honeypot is the only source, and zabbix_log.py records what it actually sends,
+# honeypot is the only source, and groundtruth/zabbix_log.py records what it sends,
 # packet by packet, into its own <tag>_zabbix.pcap and <tag>_knownzabbix.json
 # (also folded into the benign and all-traffic unions). It reads the Zabbix and
-# attacker addresses from config.yaml; if they are unset it says so loudly and
-# the run proceeds without Zabbix ground truth.
+# attacker addresses from config/config.yaml; if they are unset it says so loudly
+# and the run proceeds without Zabbix ground truth.
 #
 # ATTACKER: every packet to or from addresses.attacker_ip is known attacker /
 # anomalous traffic by definition, in EVERY profile including the baseline, so
-# attacker_log.py runs on every capture. It records that stream packet by packet
+# groundtruth/attacker_log.py runs on every capture. It records it packet by packet
 # into <tag>_attacker_traffic.pcap and <tag>_attacker_traffic.json, folded into
 # <tag>_alltraffic.json but deliberately NOT into the known-benign or known-user
 # unions. An empty attacker stream is the correct result for a clean baseline.
 #
 # STOPPING A RUN: the untimed profiles (run1, run2, selftest -- anything whose
-# run_seconds is null in config.yaml) run for as long as you want them to. Type
+# run_seconds is null in config/config.yaml) run for as long as you want. Type
 #
 #     exit
 #
@@ -37,26 +42,28 @@
 # own at run_seconds, and prints the same summary then.
 #
 # Run on the capture host (the one that sees the mirror). For the promsvc scrape,
-# run gen.py on the monitoring VM with the SAME seed and run id this prints.
+# run generator/gen.py on the monitoring VM with the SAME seed and run id this prints.
 #
-#   sudo ./run_capture.sh baseline ens19            # fresh random 5-digit seed
-#   sudo ./run_capture.sh run2     ens19  13370      # pinned seed
+#   sudo ./capture/run_capture.sh baseline ens19     # fresh random 5-digit seed
+#   sudo ./capture/run_capture.sh run2     ens19  13370   # pinned seed
 #
 # ens19 = the interface carrying the mirror copy off the honeypot.
 set -euo pipefail
 
-PROFILE="${1:?usage: run_capture.sh <profile> <capture_iface> [seed]}"
+PROFILE="${1:?usage: capture/run_capture.sh <profile> <capture_iface> [seed]}"
 IFACE="${2:?need capture interface, e.g. ens19}"
 SEED="${3:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="$HERE/.venv/bin/python3"; [ -x "$PYTHON" ] || PYTHON="python3"
+ROOT="$(cd "$HERE/.." && pwd)"      # repository root: logs/, .current_run, .venv
+PYTHON="$ROOT/.venv/bin/python3"; [ -x "$PYTHON" ] || PYTHON="python3"
+CONFIG="$ROOT/config/config.yaml"
 
 # fresh random 5-digit seed if none pinned
 [ -z "$SEED" ] && SEED=$(( (RANDOM % 90000) + 10000 ))
 
 # next zero-padded sequential run id (0001, 0002, ...) from existing run dirs
 NEXT=1
-for d in "$HERE"/logs/R*-S*_logs; do
+for d in "$ROOT"/logs/R*-S*_logs; do
     [ -e "$d" ] || continue
     b="$(basename "$d")"; num="${b#R}"; num="${num%%-*}"
     # A run id is digits. Anything else in there is not a run directory, and 10#
@@ -69,7 +76,7 @@ done
 RUN_ID="$(printf '%04d' "$NEXT")"
 
 TAG="R${RUN_ID}-S${SEED}"
-RUN_DIR="$HERE/logs/${TAG}_logs"
+RUN_DIR="$ROOT/logs/${TAG}_logs"
 PCAP="${RUN_DIR}/${TAG}.pcap"
 ZBX_PCAP="${RUN_DIR}/${TAG}_zabbix.pcap"
 ATK_PCAP="${RUN_DIR}/${TAG}_attacker_traffic.pcap"
@@ -88,7 +95,8 @@ FAILURES=0
 
 # ------------------------------------------------------------------ reporting
 
-# capture_report.py does the verification: what was written, how many packets and
+# capture_report.py (its sibling in capture/) does the verification: what was
+# written, how many packets and
 # records are in each file, and whether anything is missing or truncated. Its
 # exit status is 1 if it found a problem and 2 if it could not run at all, in
 # which case fall back to a bare listing so the operator is never left guessing.
@@ -222,14 +230,14 @@ trap cleanup EXIT
 # ------------------------------------------------------------------ run
 
 mkdir -p "$RUN_DIR"
-echo "$TAG" > "$HERE/.current_run"
+echo "$TAG" > "$ROOT/.current_run"
 
 echo "[*] run_id=$RUN_ID  tag=$TAG"
 echo "[*] dir   =$RUN_DIR"
 echo "[*] pcap  =$PCAP  (iface $IFACE)"
 echo "[*] zabbix=$ZBX_PCAP  (real agent traffic, captured separately)"
 echo "[*] attack=$ATK_PCAP  (all traffic to/from the attacker address)"
-echo "[*] seed  =$SEED  -> use this same seed AND run-id for gen.py on the promsvc VM"
+echo "[*] seed  =$SEED  -> same seed AND run-id for generator/gen.py on the promsvc VM"
 
 # capture everything on the mirror; full snaplen for payload / JA3 analysis
 tcpdump -i "$IFACE" -s 0 -w "$PCAP" -U < /dev/null &
@@ -250,9 +258,9 @@ fi
 # The real Zabbix agent's traffic, captured and labeled on its own. It owns the
 # tcpdump it needs (one process, so the dedicated pcap and the ground-truth
 # records are decoded from the same packets), and it self-disables with a loud
-# warning if config.yaml carries no Zabbix addresses -- a missing Zabbix stream
+# warning if the config carries no Zabbix addresses -- a missing Zabbix stream
 # is worth a warning, but not worth throwing away an otherwise good capture.
-"$PYTHON" -u "$HERE/zabbix_log.py" --config "$HERE/config.yaml" --iface "$IFACE" \
+"$PYTHON" -u "$ROOT/groundtruth/zabbix_log.py" --config "$CONFIG" --iface "$IFACE" \
     --run-dir "$RUN_DIR" --tag "$TAG" --role honeypot < /dev/null &
 ZBX_PID=$!
 
@@ -263,19 +271,19 @@ ZBX_PID=$!
 # It self-disables with a loud warning if addresses.attacker_ip is unset or
 # malformed, and capture_report.py reports that as a problem rather than a
 # warning: a run without attacker ground truth cannot be labeled.
-"$PYTHON" -u "$HERE/attacker_log.py" --config "$HERE/config.yaml" --iface "$IFACE" \
+"$PYTHON" -u "$ROOT/groundtruth/attacker_log.py" --config "$CONFIG" --iface "$IFACE" \
     --run-dir "$RUN_DIR" --tag "$TAG" --role honeypot < /dev/null &
 ATK_PID=$!
 
 # -u so the generator's progress lines survive a redirect to a log file; stdin is
 # /dev/null because the exit watcher below owns the terminal
-"$PYTHON" -u "$HERE/gen.py" --profile "$PROFILE" --role honeypot \
-    --seed "$SEED" --run-id "$RUN_ID" --base "$HERE" --config "$HERE/config.yaml" \
+"$PYTHON" -u "$ROOT/generator/gen.py" --profile "$PROFILE" --role honeypot \
+    --seed "$SEED" --run-id "$RUN_ID" --base "$ROOT" --config "$CONFIG" \
     < /dev/null &
 GEN_PID=$!
 
 GEN_LOG_HINT="[i] During run1/run2, log attacker actions and browsing with:
-    $PYTHON $HERE/log_user.py \"<note>\" --source attacker|browsing"
+    $PYTHON $ROOT/groundtruth/log_user.py \"<note>\" --source attacker|browsing"
 echo
 echo "$GEN_LOG_HINT"
 echo

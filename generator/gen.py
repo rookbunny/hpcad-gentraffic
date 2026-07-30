@@ -13,24 +13,42 @@ selects which processes fire locally (honeypot vs. promsvc). One --seed
 reproduces the whole run across all hosts, because each process is seeded from
 (master_seed, process_name).
 
-    python3 gen.py --profile baseline --role honeypot --seed 13370
-    python3 gen.py --profile baseline --role promsvc  --seed 13370 --run-id 0001
+    python3 generator/gen.py --profile baseline --role honeypot --seed 13370
+    python3 generator/gen.py --profile baseline --role promsvc  --seed 13370 --run-id 0001
+
+Paths default to the repository root inferred from this file's location, so the
+config (config/config.yaml) and the run directories (logs/<tag>_logs/) are found
+no matter which directory it is invoked from.
 
 A profile whose run_seconds is null has no timer: it runs until SIGINT, SIGTERM or
 SIGHUP (Ctrl-C, systemctl stop, a dropped ssh session, or the operator typing exit
-into run_capture.sh) and then finalizes the manifest with the actual elapsed time.
---run-seconds overrides either way; --run-seconds 0 forces the untimed behavior.
+into capture/run_capture.sh) and then finalizes the manifest with the actual
+elapsed time. --run-seconds overrides either way; --run-seconds 0 forces the
+untimed behavior.
 
 Not generated here: the C2 beacon (hand-run) and manual web browsing, which are
-the anomalous / human streams, recorded via log_user.py; and Zabbix, which is
-never simulated -- the real zabbix-agent daemon on the honeypot is the only
-source of that stream and zabbix_log.py captures it at the packet level.
+the anomalous / human streams, recorded via groundtruth/log_user.py; and Zabbix,
+which is never simulated -- the real zabbix-agent daemon on the honeypot is the
+only source of that stream and groundtruth/zabbix_log.py captures it at the
+packet level.
 """
 
 import argparse, hashlib, json, os, random, signal, smtplib, ssl, sys, threading, time
 import urllib.request
 from datetime import datetime, timezone
 
+# Repo root, and the defaults that hang off it. This file lives in generator/, so
+# everything it reads or writes is one level up: the config in config/, the run
+# directories under logs/, and logio in groundtruth/. Resolving them from
+# __file__ rather than the cwd means gen.py behaves the same whether it is run
+# from the repo root, from generator/, or by absolute path from a systemd unit.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CONFIG = os.path.join(ROOT, "config", "config.yaml")
+
+# The ground-truth writers are the one import that crosses a directory: they live
+# with the other logging code in groundtruth/, because that is where they belong
+# thematically, and this is the only consumer outside it.
+sys.path.insert(0, os.path.join(ROOT, "groundtruth"))
 import logio
 
 # ------------------------------------------------------------------ utilities
@@ -211,14 +229,16 @@ PROCS = {
     "noop": proc_noop,
 }
 # No Zabbix process: Zabbix traffic is never simulated here. The real
-# zabbix-agent daemon on the honeypot is the only source, and zabbix_log.py
-# captures and labels it at the packet level (see README, "Zabbix").
+# zabbix-agent daemon on the honeypot is the only source, and
+# groundtruth/zabbix_log.py captures and labels it at the packet level
+# (see README, "Zabbix").
 
 # ------------------------------------------------------------------ main
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help="generated config; defaults to <repo>/config/config.yaml")
     ap.add_argument("--profile", required=True)
     ap.add_argument("--role", default="honeypot",
                     help="which host this is: honeypot | promsvc | any")
@@ -227,7 +247,7 @@ def main():
     ap.add_argument("--run-seconds", type=int, default=None,
                     help="override the profile's run length; 0 means run until "
                          "stopped (SIGINT/SIGTERM)")
-    ap.add_argument("--base", default=".",
+    ap.add_argument("--base", default=ROOT,
                     help="repo root; run dirs are created under <base>/logs/<tag>_logs/")
     ap.add_argument("--run-id", default=None)
     args = ap.parse_args()
@@ -238,19 +258,21 @@ def main():
             cfg = yaml.safe_load(f)
     except OSError as e:
         sys.exit(f"cannot read {args.config}: {e}\n"
-                 f"    run ./SETUP.sh to generate it from config.example.yaml")
+                 f"    run ./config/SETUP.sh to generate it from "
+                 f"config/config.example.yaml")
 
     # Before the first SETUP.sh run, config.yaml is the comment-only placeholder
     # and yaml hands back None for it. Say which file and what to do about it: the
     # alternative is a TypeError on the profile lookup below, which names neither.
     if not cfg:
         sys.exit(f"{args.config} has no configuration in it yet\n"
-                 f"    run ./SETUP.sh to generate it from config.example.yaml")
+                 f"    run ./config/SETUP.sh to generate it from "
+                 f"config/config.example.yaml")
     for section in ("profiles", "processes", "endpoints"):
         if not cfg.get(section):
             sys.exit(f"{args.config} has no {section!r} section\n"
-                     f"    re-run ./SETUP.sh to regenerate it from "
-                     f"config.example.yaml")
+                     f"    re-run ./config/SETUP.sh to regenerate it from "
+                     f"config/config.example.yaml")
 
     if args.profile not in cfg["profiles"]:
         sys.exit(f"unknown profile {args.profile!r}; have {list(cfg['profiles'])}")
@@ -285,9 +307,10 @@ def main():
         "timed": run_seconds is not None,
         "started": now_iso(), "processes": {n: cfg["processes"][n] for n in selected},
         "note": ("C2 beacon + manual browsing are not generated here; they are "
-                 "recorded via log_user.py. Zabbix is not generated either: the "
-                 "real zabbix-agent daemon is the only source, and zabbix_log.py "
-                 "captures it per packet into <tag>_zabbix.pcap and "
+                 "recorded via groundtruth/log_user.py. Zabbix is not generated "
+                 "either: the real zabbix-agent daemon is the only source, and "
+                 "groundtruth/zabbix_log.py captures it per packet into "
+                 "<tag>_zabbix.pcap and "
                  "<tag>_knownzabbix.json, folded into the benign and all-traffic "
                  "unions."),
     }

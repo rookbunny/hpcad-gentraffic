@@ -1,5 +1,7 @@
 """Shared machinery for the per-stream packet taps.
 
+Its two subclasses are its siblings here in groundtruth/.
+
 zabbix_log.py and attacker_log.py do the same thing to a different slice of the
 wire: run one tcpdump with a BPF filter, write every matching packet through to a
 dedicated pcap byte for byte, and decode those same packets into ground-truth
@@ -79,7 +81,7 @@ def bpf_host(value, label):
     problem = address_problem(value)
     if problem:
         raise SystemExit(f"[!] {label}={value!r} in the config is not an IP "
-                         f"address or network; fix it (re-run SETUP.sh)")
+                         f"address or network; fix it (re-run config/SETUP.sh)")
     return f"host {value}"
 
 
@@ -262,7 +264,7 @@ class TeeCapture:
         detail = dict(fields)
         detail.update(frame_len=framelen, cap_len=caplen, iface=self.iface)
         self.annotate(fields, detail)
-        # Same record shape gen.py writes, so a packet stream merges with the
+        # Same record shape generator/gen.py writes, so a packet stream merges with the
         # scripted events on run_id/seed/role/proc without special casing.
         self.emit({
             "run_id": self.run_id, "seed": self.seed, "role": self.role,

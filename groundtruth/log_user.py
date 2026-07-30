@@ -8,19 +8,21 @@ Each event is appended to <tag>_knownuser.json and mirrored into
 <tag>_alltraffic.json inside the run's logs/<tag>_logs/ directory, where the tag
 is the run's R<run_id>-S<seed> stem.
 
-The tag defaults to the value written by run_capture.sh into <base>/.current_run,
-so it can be omitted during an active capture.
+The tag defaults to the value written by capture/run_capture.sh into
+<base>/.current_run, so it can be omitted during an active capture.
 
-    python3 log_user.py "hydra ssh brute force start" --source attacker --phase T1110
-    python3 log_user.py "youtube session start"       --source browsing
-    python3 log_user.py "sliver interactive shell open" --source attacker
+    python3 groundtruth/log_user.py "hydra ssh brute force start" --source attacker --phase T1110
+    python3 groundtruth/log_user.py "youtube session start"       --source browsing
+    python3 groundtruth/log_user.py "sliver interactive shell open" --source attacker
 """
 import argparse, os, time
 from datetime import datetime, timezone
 
 import logio
 
-DEFAULT_BASE = os.path.dirname(os.path.abspath(__file__))
+# This file lives in groundtruth/, but .current_run and logs/ live at the
+# repository root one level up, which is what --base means everywhere.
+DEFAULT_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def read_current_run(base):
     """The active run tag from <base>/.current_run, or "unknown".

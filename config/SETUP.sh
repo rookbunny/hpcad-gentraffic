@@ -2,13 +2,18 @@
 # Generate config.yaml from config.example.yaml by prompting for the values that
 # are specific to a given range. The generated config.yaml holds a password and
 # internal addresses; it is gitignored and written mode 600. Run this once per
-# host before the first capture.
+# host before the first capture:
+#
+#     ./config/SETUP.sh
+#
+# Both the template and the generated file live in this directory, alongside this
+# script, which is where every other component looks for the config by default.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 EXAMPLE="$HERE/config.example.yaml"
 OUT="$HERE/config.yaml"
 
-[ -f "$EXAMPLE" ] || { echo "missing config.example.yaml"; exit 1; }
+[ -f "$EXAMPLE" ] || { echo "missing $EXAMPLE"; exit 1; }
 
 # config.yaml exists as a comment-only placeholder before the first run, so its
 # mere presence is not a reason to prompt: a file with no setting in it holds
@@ -19,7 +24,7 @@ config_has_settings() {
 }
 
 if [ -f "$OUT" ] && config_has_settings "$OUT"; then
-    read -rp "config.yaml already exists. Overwrite? [y/N] " a
+    read -rp "$OUT already exists. Overwrite? [y/N] " a
     [[ "$a" =~ ^[Yy]$ ]] || { echo "aborted"; exit 0; }
 fi
 
@@ -37,11 +42,12 @@ read -rp "Healthcheck port [8080]: " HC_PORT; HC_PORT=${HC_PORT:-8080}
 read -rp "node_exporter port [9100]: " NE_PORT; NE_PORT=${NE_PORT:-9100}
 
 # Addresses used to attribute packets, not to generate traffic. No Zabbix
-# traffic is simulated: the real zabbix-agent daemon is the only source, and
-# these two addresses are what zabbix_log.py filters its packet capture on. The
-# attacker address is excluded from that filter, so an operator impersonating
-# the Zabbix service account is never labeled as benign telemetry; attacker_log.py
-# captures every packet to or from it as its own class instead. That makes the
+# traffic is simulated: the real zabbix-agent daemon is the only source, and these
+# two addresses are what groundtruth/zabbix_log.py filters its packet capture on.
+# The attacker address is excluded from that filter, so an operator impersonating
+# the Zabbix service account is never labeled as benign telemetry;
+# groundtruth/attacker_log.py captures every packet to or from it as its own class
+# instead. That makes the
 # attacker address the single most important value here: get it wrong and the
 # attack lands in the capture with no label on it.
 echo

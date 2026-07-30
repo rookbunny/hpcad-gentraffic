@@ -27,30 +27,56 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 
 ## Repository contents
 
+Files are grouped by what they do. Each directory is one concern, and the two
+commands an operator actually types are `config/SETUP.sh` (once per host) and
+`capture/run_capture.sh` (once per capture).
+
+```
+config/         generate and hold the host's configuration
+generator/      produce the benign traffic
+groundtruth/    write and label the ground truth
+capture/        orchestrate a capture and verify what it wrote
+companions/     stand-in endpoints the generator talks to
+systemd/        optional unit for long unattended runs
+mirror-persistence/   reboot-persistent tc mirror setup
+howtorun/       step-by-step runbooks, in order
+logs/           where captures land (gitignored except the layout template)
+```
+
 | Path | Runs on | Purpose |
 |---|---|---|
-| `gen.py` | honeypot + promsvc | the driver |
-| `config.example.yaml` | — | template; `SETUP.sh` generates `config.yaml` from it |
-| `SETUP.sh` | each host | prompts for range values, writes `config.yaml` |
-| `run_capture.sh` | capture host | tcpdump + generator, tied under one run id |
-| `zabbix_log.py` | capture host | captures and labels the REAL Zabbix agent's traffic |
-| `attacker_log.py` | capture host | captures and labels ALL traffic to/from the attacker IP |
-| `pcaptap.py` | — | shared packet-tap machinery behind those two |
-| `log_user.py` | capture host | records manual/attacker events into the ground truth |
-| `logio.py` | — | shared append-only logging |
-| `systemd/Honeypot_gentraffic@.service` | honeypot | optional bounded service for long runs |
+| `config/SETUP.sh` | each host | prompts for range values, writes `config/config.yaml` |
+| `config/config.example.yaml` | — | template `config/SETUP.sh` generates the config from |
+| `generator/gen.py` | honeypot + promsvc | the driver |
+| `groundtruth/logio.py` | — | shared append-only logging |
+| `groundtruth/log_user.py` | capture host | records manual/attacker events into the ground truth |
+| `groundtruth/zabbix_log.py` | capture host | captures and labels the REAL Zabbix agent's traffic |
+| `groundtruth/attacker_log.py` | capture host | captures and labels ALL traffic to/from the attacker IP |
+| `groundtruth/pcaptap.py` | — | shared packet-tap machinery behind those two |
+| `capture/run_capture.sh` | capture host | tcpdump + generator, tied under one run id |
+| `capture/capture_report.py` | capture host | verifies and summarizes what a capture wrote |
 | `companions/ws_echo_server.py` | chat VM | target for the chat keepalive |
 | `companions/health_server.py` | service VM | target for the healthcheck |
+| `systemd/Honeypot_gentraffic@.service` | honeypot | optional bounded service for long runs |
+| `systemd/run.env` | honeypot | optional pinned seed for that unit |
 | [`mirror-persistence/`](mirror-persistence/README.md) | honeypot + monitor | reboot-persistent tc mirror + passive capture setup |
+| [`howtorun/`](howtorun/01-testing.md) | — | numbered runbooks: test, baseline, systemd, run1, run2 |
 | [`logs/`](logs/README.md) | every host | where captures land; the layout is documented there, the runs themselves are gitignored |
+
+Every program resolves its paths from its own location, so `config/config.yaml`,
+`logs/`, and `.current_run` are found the same way whether a command is run from
+the repository root, from inside one of these directories, or by absolute path
+from a systemd unit. `.current_run` and `logs/` stay at the repository root
+because more than one directory writes to them.
 
 Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
 browsing. Those are the anomalous and human streams, and they are recorded with
-`log_user.py`. Zabbix is not generated either — that stream comes from the real
-`zabbix-agent` daemon on the Rocky 9 honeypot and is captured at the packet level
-by `zabbix_log.py` (see "Zabbix" below). Nor is the attack: every packet to or
-from the attacker address is captured at the packet level by `attacker_log.py`,
-in every run, as its own class (see "Attacker traffic" below).
+`groundtruth/log_user.py`. Zabbix is not generated either — that stream comes from
+the real `zabbix-agent` daemon on the Rocky 9 honeypot and is captured at the
+packet level by `groundtruth/zabbix_log.py` (see "Zabbix" below). Nor is the
+attack: every packet to or from the attacker address is captured at the packet
+level by `groundtruth/attacker_log.py`, in every run, as its own class (see
+"Attacker traffic" below).
 
 ## Traffic model
 
@@ -105,25 +131,25 @@ dependencies, and never uses the mail password.
    ```
 
 3. Generate the configuration. Run this first; it prompts for the
-   range-specific addresses and the mail password and writes `config.yaml`
-   (gitignored, mode 600) from the template.
+   range-specific addresses and the mail password and writes `config/config.yaml`
+   (gitignored, mode 600) from the template next to it.
 
    ```bash
-   ./SETUP.sh
+   ./config/SETUP.sh
    ```
 
    Three of its prompts are addresses used to attribute packets rather than to
    generate traffic: the **Zabbix server IP**, the **Zabbix agent IP** (the
    honeypot itself, which defaults to the honeypot address already entered), and
-   the **attacker IP**. `zabbix_log.py` and `attacker_log.py` build their capture
-   filters from them.
+   the **attacker IP**. `groundtruth/zabbix_log.py` and
+   `groundtruth/attacker_log.py` build their capture filters from them.
 
    The attacker IP must be the address the operator **actually works from** during
    `run1`/`run2`. Every packet to or from it is labeled as attacker traffic, so if
    it is wrong the attack still lands in `<tag>.pcap` but with no label on it, and
    the run is not usable as ground truth. A CIDR is accepted when the operator
-   works from more than one host. Re-run `SETUP.sh` if the address changes between
-   captures.
+   works from more than one host. Re-run `config/SETUP.sh` if the address changes
+   between captures.
 
 4. Start the companion targets so the chat keepalive and healthcheck have
    endpoints. Run each on its respective VM.
@@ -131,6 +157,9 @@ dependencies, and never uses the mail password.
    ```bash
    # chat VM
    python3 companions/ws_echo_server.py 0.0.0.0 8765
+   ```
+
+   ```bash
    # service VM
    python3 companions/health_server.py 0.0.0.0 8080
    ```
@@ -149,7 +178,8 @@ seed. On disk both are folded into a single stem, the run tag `R<run_id>-S<seed>
 `<tag>_alltraffic.json`, the `<tag>.pcap`, the Zabbix-only `<tag>_zabbix.pcap`, the
 attacker-only `<tag>_attacker_traffic.pcap`, `<tag>.zabbix.meta.json`,
 `<tag>.attacker.meta.json`, and `<tag>.<role>.manifest.json`. A `.current_run`
-pointer at the repository root records the active run tag for `log_user.py`.
+pointer at the repository root records the active run tag for
+`groundtruth/log_user.py`.
 [`logs/README.md`](logs/README.md) draws that tree out in full, next to a
 `_TEMPLATE_R0000-S00000_logs/` directory of empty files showing where each one
 lands before any capture has been taken.
@@ -163,14 +193,14 @@ the whole run because each process is seeded from `(seed, process_name)`.
    the honeypot processes. The script prints a run id and seed.
 
    ```bash
-   sudo ./run_capture.sh baseline ens19          # fresh 5-digit seed
-   sudo ./run_capture.sh run2     ens19  13370    # pinned seed
+   sudo ./capture/run_capture.sh baseline ens19          # fresh 5-digit seed
+   sudo ./capture/run_capture.sh run2     ens19  13370    # pinned seed
    ```
 
 2. On the monitoring VM, run the scrape process with the same seed and run id.
 
    ```bash
-   ./.venv/bin/python3 gen.py --profile baseline --role promsvc \
+   ./.venv/bin/python3 generator/gen.py --profile baseline --role promsvc \
        --seed <seed> --run-id <run_id>
    ```
 
@@ -181,8 +211,8 @@ the whole run because each process is seeded from `(seed, process_name)`.
    it happens. The run id is read from the `.current_run` pointer automatically.
 
    ```bash
-   ./.venv/bin/python3 log_user.py "hydra ssh brute force start" --source attacker --phase T1110
-   ./.venv/bin/python3 log_user.py "youtube session start"       --source browsing
+   ./.venv/bin/python3 groundtruth/log_user.py "hydra ssh brute force start" --source attacker --phase T1110
+   ./.venv/bin/python3 groundtruth/log_user.py "youtube session start"       --source browsing
    ```
 
 Profiles (all captured at a 15s bucket span):
@@ -199,7 +229,7 @@ Profiles (all captured at a 15s bucket span):
 `baseline` is timed and ends on its own. Every other profile has `run_seconds:
 null` in the config and runs for as long as the engagement needs, so run lengths
 can vary from capture to capture. To stop one, type `exit` (Ctrl-C also works) in
-the terminal running `run_capture.sh`:
+the terminal running `capture/run_capture.sh`:
 
 ```bash
 exit
@@ -213,17 +243,17 @@ same summary prints on any other exit too -- a SIGTERM, a script error, a closed
 stdin -- so a run never ends silently. The exit status is non-zero if anything is
 missing, empty, or truncated.
 
-The check is `capture_report.py`, which can also be run later against any
+The check is `capture/capture_report.py`, which can also be run later against any
 finished run:
 
 ```bash
-./.venv/bin/python3 capture_report.py logs/R0001-S12345_logs R0001-S12345
+./.venv/bin/python3 capture/capture_report.py logs/R0001-S12345_logs R0001-S12345
 ```
 
-An existing `config.yaml` predates the untimed profiles, so re-run `SETUP.sh`, or
+An existing `config/config.yaml` predates the untimed profiles, so re-run `config/SETUP.sh`, or
 set `run_seconds: null` for `run1`, `run2`, and `selftest` by hand. A profile
 that still carries a number keeps stopping at that number; `--run-seconds` on
-`gen.py` overrides either way.
+`generator/gen.py` overrides either way.
 
 ## Long runs (systemd)
 
@@ -243,11 +273,11 @@ starting; with no file present the generator selects a random seed and records
 it in the manifest.
 
 ```bash
-echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/run.env
+echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/systemd/run.env
 ```
 
 The systemd unit runs the generator only. For a baseline pcap that survives a
-disconnect, run `run_capture.sh baseline ens19` inside a tmux session instead.
+disconnect, run `capture/run_capture.sh baseline ens19` inside a tmux session instead.
 
 ## Reseeding per capture
 
@@ -268,7 +298,7 @@ There are three **classes** — `benign`, `user`, and `attacker` — and
 
 - `<tag>_knownbenign.json` — the holistic benign union: every scripted benign
   action, plus one record per real Zabbix packet.
-- `<tag>_knownuser.json` — every manual action recorded via `log_user.py`
+- `<tag>_knownuser.json` — every manual action recorded via `groundtruth/log_user.py`
   (attacker actions and web browsing).
 - `<tag>_knownzabbix.json` — the real Zabbix agent's traffic on its own, one
   record per packet. A subset view of `knownbenign`, not a separate class.
@@ -278,7 +308,7 @@ There are three **classes** — `benign`, `user`, and `attacker` — and
 - `<tag>_alltraffic.json` — the union of everything, distinguished by the
   `class` field. `knownbenign + knownuser + attacker_traffic == alltraffic` holds
   exactly, with the Zabbix stream counted once inside `knownbenign`;
-  `capture_report.py` checks that arithmetic at the end of every run.
+  `capture/capture_report.py` checks that arithmetic at the end of every run.
 
 The two per-stream logs sit inside that arithmetic differently, and the
 difference is the point. `knownzabbix` is a *subset view* of `knownbenign`,
@@ -287,7 +317,7 @@ class*, because adversary traffic is neither known-benign nor known-user, and
 folding it into either union would poison the very label it exists to define.
 
 Note that the `attacker` class covers **packets**, not annotations. The operator's
-own notes about what they were doing — `log_user.py --source attacker` — stay in
+own notes about what they were doing — `groundtruth/log_user.py --source attacker` — stay in
 `knownuser.json` with `class=user`, deliberately: they are human keyboard events
 recorded by hand, not traffic observed on the wire, and they are what you read the
 packet labels *against*. The packets say what crossed the wire; the notes say what
@@ -321,18 +351,18 @@ telemetry from a genuine agent. Zabbix matters twice over — it is cover traffi
 and it is the service account the covert run impersonates — so a simulated
 stand-in would be the wrong thing to train or score a model against.
 
-`zabbix_log.py` records it. `run_capture.sh` starts it alongside the run's main
+`groundtruth/zabbix_log.py` records it. `capture/run_capture.sh` starts it alongside the run's main
 tcpdump and stops it at the end of the run, and it can also be run by hand:
 
 ```bash
-sudo ./.venv/bin/python3 zabbix_log.py --iface ens19 \
+sudo ./.venv/bin/python3 groundtruth/zabbix_log.py --iface ens19 \
     --run-dir logs/R0001-S12345_logs --tag R0001-S12345
 ```
 
 It owns one tcpdump, filtered to the Zabbix conversation, and tees it: every
 packet is written through to `<tag>_zabbix.pcap` byte for byte **and** decoded
 into one ground-truth record. The dedicated pcap and the log therefore come from
-the same packets and cannot disagree, which `capture_report.py` verifies by
+the same packets and cannot disagree, which `capture/capture_report.py` verifies by
 comparing their counts.
 
 What lands where, for one Zabbix packet:
@@ -353,41 +383,41 @@ The filter is therefore the Zabbix addresses scoped to the Zabbix ports —
 is what makes "involving Zabbix" mean the telemetry rather than everything the
 honeypot does. 10050 is the agent's passive checks and 10051 is the server side
 (active checks, `zabbix_sender`); add ports under `zabbix_capture.ports` in
-`config.yaml` if a Zabbix proxy or a non-default port is in play.
+`config/config.yaml` if a Zabbix proxy or a non-default port is in play.
 
 **The attacker address is excluded.** `run2`'s covert operator impersonates the
 Zabbix service account, so packets from `addresses.attacker_ip` are the
-adversary's and must not be labeled as benign telemetry. `attacker_log.py`
+adversary's and must not be labeled as benign telemetry. `groundtruth/attacker_log.py`
 captures and labels them instead, as attacker traffic. Set
 `zabbix_capture.exclude_attacker: false` to fold them into the Zabbix stream
 anyway.
 
-If `config.yaml` has no Zabbix addresses, the logger disables itself, says so
+If `config/config.yaml` has no Zabbix addresses, the logger disables itself, says so
 loudly, and writes `<tag>.zabbix.meta.json` with `enabled: false` and the reason,
 so the closing summary reports the gap instead of a run quietly lacking Zabbix
-ground truth. Re-run `SETUP.sh` to fix it.
+ground truth. Re-run `config/SETUP.sh` to fix it.
 
 ## Attacker traffic
 
 Any packet whose source or destination is `addresses.attacker_ip` is known
 attacker/anomalous traffic **by definition** — whatever protocol it speaks and
 whatever port it lands on. That is a property of the address, not of the run
-type, so `attacker_log.py` runs on **every** capture including the baseline.
+type, so `groundtruth/attacker_log.py` runs on **every** capture including the baseline.
 
-`run_capture.sh` starts it alongside the run's main tcpdump and stops it last, so
+`capture/run_capture.sh` starts it alongside the run's main tcpdump and stops it last, so
 the attacker stream is recorded for the whole capture window. It can also be run
 by hand:
 
 ```bash
-sudo ./.venv/bin/python3 attacker_log.py --iface ens19 \
+sudo ./.venv/bin/python3 groundtruth/attacker_log.py --iface ens19 \
     --run-dir logs/R0001-S12345_logs --tag R0001-S12345
 ```
 
 Like the Zabbix logger it owns one tcpdump and tees it: every packet is written
 through to `<tag>_attacker_traffic.pcap` byte for byte **and** decoded into one
 ground-truth record, so the dedicated pcap and the log come from the same packets
-and cannot disagree. `capture_report.py` verifies that by comparing their counts.
-Both taps share the capture loop and header decoding in `pcaptap.py`.
+and cannot disagree. `capture/capture_report.py` verifies that by comparing their counts.
+Both taps share the capture loop and header decoding in `groundtruth/pcaptap.py`.
 
 What lands where, for one attacker packet:
 
@@ -422,9 +452,9 @@ about that case specifically.
 
 If `addresses.attacker_ip` is unset or malformed, the logger disables itself,
 says so loudly, and writes `<tag>.attacker.meta.json` with `enabled: false`.
-`capture_report.py` reports that as a **problem** rather than a warning, and the
+`capture/capture_report.py` reports that as a **problem** rather than a warning, and the
 run exits non-zero: attacker ground truth is expected in every run, so its absence
-means the config is wrong and the capture cannot be labeled. Re-run `SETUP.sh`.
+means the config is wrong and the capture cannot be labeled. Re-run `config/SETUP.sh`.
 
 ## One more decision worth knowing
 

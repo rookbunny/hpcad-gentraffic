@@ -8,11 +8,11 @@
 
 ## Preconditions
 
-- `SETUP.sh` has been run on the honeypot capture host and `config.yaml` exists (mode 600).
+- `config/SETUP.sh` has been run on the honeypot capture host and `config/config.yaml` exists (mode 600).
 - The virtual environment is present at `.venv` and dependencies are installed.
 - Companion targets are running on their own VMs.
-  - Chat: `python3 ws_echo_server.py 0.0.0.0 8765`
-  - Healthcheck: `python3 health_server.py 0.0.0.0 8080`
+  - Chat: `python3 companions/ws_echo_server.py 0.0.0.0 8765`
+  - Healthcheck: `python3 companions/health_server.py 0.0.0.0 8080`
 - `node_exporter` is reachable on the honeypot at `:9100`.
 - The mirror interface (for example `ens19`) carries the copied honeypot traffic.
 - The real `zabbix-agent` daemon is running on the honeypot. No Zabbix traffic is generated, so this daemon is the only source of that stream.
@@ -24,7 +24,7 @@ The `selftest` profile runs the `noop` process, which touches no real endpoint. 
 1. Run the profile end to end, including tcpdump, on the capture host.
 
    ```bash
-   sudo ./run_capture.sh selftest ens19
+   sudo ./capture/run_capture.sh selftest ens19
    ```
 
 2. Let it run for half a minute or so, then stop it by typing `exit` and pressing Enter (Ctrl-C also works).
@@ -35,9 +35,9 @@ The `selftest` profile runs the `noop` process, which touches no real endpoint. 
 
    The closing summary is the thing being tested here. It should list `<tag>.pcap`, `<tag>_knownbenign.json`, `<tag>_alltraffic.json`, and `<tag>.honeypot.manifest.json`, each `OK` with a non-zero count, report roughly the elapsed time you let it run, and end with `all expected files were written successfully`. If it names a `MISSING`, `EMPTY`, or `PARTIAL` file instead, fix that before any real capture: the same check runs at the end of every run.
 
-   The summary also reports the Zabbix capture: the BPF filter it used, and how many packets landed in `<tag>_zabbix.pcap` and in the logs. A half-minute selftest may legitimately catch no Zabbix packets, which is reported as a warning rather than a failure. What must not appear is `zabbix: DISABLED` — that means `config.yaml` has no Zabbix addresses, so re-run `SETUP.sh` before a real capture.
+   The summary also reports the Zabbix capture: the BPF filter it used, and how many packets landed in `<tag>_zabbix.pcap` and in the logs. A half-minute selftest may legitimately catch no Zabbix packets, which is reported as a warning rather than a failure. What must not appear is `zabbix: DISABLED` — that means `config/config.yaml` has no Zabbix addresses, so re-run `config/SETUP.sh` before a real capture.
 
-   It reports the attacker capture the same way, and here `attacker: DISABLED` is a **problem** rather than a warning, so the summary ends non-zero. Attacker ground truth is expected in every run, so a missing or malformed `addresses.attacker_ip` has to be fixed with `SETUP.sh` before any real capture. Zero attacker packets during a selftest is fine and expected.
+   It reports the attacker capture the same way, and here `attacker: DISABLED` is a **problem** rather than a warning, so the summary ends non-zero. Attacker ground truth is expected in every run, so a missing or malformed `addresses.attacker_ip` has to be fixed with `config/SETUP.sh` before any real capture. Zero attacker packets during a selftest is fine and expected.
 
 ## Part A2. Zabbix capture wiring test
 
@@ -49,17 +49,17 @@ Zabbix traffic is real, not generated, so it is worth confirming separately that
    systemctl status zabbix-agent
    ```
 
-2. Print the filter the logger will use, straight from `config.yaml`. It should name the Zabbix server and agent addresses and exclude the attacker address.
+2. Print the filter the logger will use, straight from `config/config.yaml`. It should name the Zabbix server and agent addresses and exclude the attacker address.
 
    ```bash
-   ./.venv/bin/python3 zabbix_log.py --print-filter --iface ens19 \
+   ./.venv/bin/python3 groundtruth/zabbix_log.py --print-filter --iface ens19 \
        --run-dir /tmp --tag R0000-S00000
    ```
 
 3. Watch that filter on the mirror for a couple of the agent's intervals. Traffic in both directions on `:10050` (or `:10051` for active checks) means the stream is there to be captured.
 
    ```bash
-   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 zabbix_log.py --print-filter \
+   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 groundtruth/zabbix_log.py --print-filter \
        --iface ens19 --run-dir /tmp --tag R0000-S00000)"
    ```
 
@@ -72,16 +72,16 @@ Every packet to or from the attacker address is labeled as attacker traffic, so 
 1. Print the filter the logger will use. It must name the address you will actually attack from.
 
    ```bash
-   ./.venv/bin/python3 attacker_log.py --print-filter --iface ens19 \
+   ./.venv/bin/python3 groundtruth/attacker_log.py --print-filter --iface ens19 \
        --run-dir /tmp --tag R0000-S00000
    ```
 
-   A `# disabled:` line instead of a filter means `addresses.attacker_ip` is unset or malformed. Re-run `SETUP.sh`.
+   A `# disabled:` line instead of a filter means `addresses.attacker_ip` is unset or malformed. Re-run `config/SETUP.sh`.
 
 2. Generate one packet from the attacker host and confirm the mirror carries it. Anything works — a single SSH connection attempt, or one ping.
 
    ```bash
-   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 attacker_log.py --print-filter \
+   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 groundtruth/attacker_log.py --print-filter \
        --iface ens19 --run-dir /tmp --tag R0000-S00000)"
    ```
 
@@ -94,7 +94,7 @@ Every packet to or from the attacker address is labeled as attacker traffic, so 
    cat .current_run
    ```
 
-   `.current_run` at the repository root holds the active tag, which is what `log_user.py` picks up.
+   `.current_run` at the repository root holds the active tag, which is what `groundtruth/log_user.py` picks up.
 
 4. Confirm scripted events were written and attributed.
 
@@ -123,12 +123,12 @@ Manual web browsing originates on the honeypot and exits to an external target. 
    sudo tcpdump -i ens19 -s 0 -w /tmp/browsing_test.pcap -U
    ```
 
-4. Mark the browsing session boundaries in the ground truth. When no capture from `run_capture.sh` is active, pass an explicit test tag so the records land in a known directory rather than `unknown`.
+4. Mark the browsing session boundaries in the ground truth. When no capture from `capture/run_capture.sh` is active, pass an explicit test tag so the records land in a known directory rather than `unknown`.
 
    ```bash
-   ./.venv/bin/python3 log_user.py "youtube session start" --source browsing --tag R0000-S00000
+   ./.venv/bin/python3 groundtruth/log_user.py "youtube session start" --source browsing --tag R0000-S00000
    # load and play a video for one to two minutes through the proxied browser
-   ./.venv/bin/python3 log_user.py "youtube session stop"  --source browsing --tag R0000-S00000
+   ./.venv/bin/python3 groundtruth/log_user.py "youtube session stop"  --source browsing --tag R0000-S00000
    ```
 
 5. Stop tcpdump and confirm the streaming flow was mirrored.
@@ -143,7 +143,7 @@ Manual web browsing originates on the honeypot and exits to an external target. 
 
 - Run directory, pcap, logs, and manifest are all created.
 - Typing `exit` stops the capture, and the closing summary ends with `all expected files were written successfully`.
-- `.current_run` holds the active tag during a `run_capture.sh` capture.
+- `.current_run` holds the active tag during a `capture/run_capture.sh` capture.
 - Companion endpoints respond and produce `ok=true` benign records under a real profile.
 - Proxied browsing appears on the mirror as flows sourced from the honeypot.
 - Manual browsing records appear in `<tag>_knownuser.json` and `<tag>_alltraffic.json` with `class=user`.

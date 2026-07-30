@@ -2,7 +2,7 @@
 """Minimal HTTP health endpoint. Run on the internal-service VM so the
 honeypot's healthcheck has a real target.
 
-    python3 health_server.py 0.0.0.0 8080
+    python3 companions/health_server.py 0.0.0.0 8080
 """
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

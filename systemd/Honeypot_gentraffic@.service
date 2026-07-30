@@ -11,22 +11,22 @@
 #   journalctl -u Honeypot_gentraffic@baseline -f
 #
 # To pin a seed (reproducible run), drop a seed into the optional env file first:
-#   echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/run.env
+#   echo 'SEED_ARG=--seed 13370' | sudo tee /opt/gunderson/systemd/run.env
 # With no env file, gen.py picks a random 5-digit seed and records it in the manifest.
 #
 # This unit runs the generator only; to capture a pcap for the run, start tcpdump
-# separately, or use run_capture.sh inside a tmux session for capture that
+# separately, or use capture/run_capture.sh inside a tmux session for capture that
 # survives a disconnect. That also means no Zabbix ground truth: the real Zabbix
-# agent's traffic is captured by zabbix_log.py, which run_capture.sh starts and
-# this unit does not.
+# agent's traffic is captured by groundtruth/zabbix_log.py, which
+# capture/run_capture.sh starts and this unit does not.
 #
 # RuntimeMaxSec is a hard backstop; the timed baseline profile already exits at
 # run_seconds. The untimed profiles (run1, run2, selftest) never exit on their
 # own, so under this unit they run until RuntimeMaxSec or a "systemctl stop".
 # Either way the SIGTERM reaches gen.py, which stops its threads and finalizes
 # the manifest with the real elapsed time -- but the unit captures no pcap, so
-# prefer run_capture.sh in tmux for those. Adjust the two paths if the repository
-# is deployed somewhere other than /opt/gunderson.
+# prefer capture/run_capture.sh in tmux for those. Adjust the paths below if the
+# repository is deployed somewhere other than /opt/gunderson.
 
 [Unit]
 Description=Honeypot benign traffic generator (%i)
@@ -36,8 +36,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/gunderson
-EnvironmentFile=-/opt/gunderson/run.env
-ExecStart=/opt/gunderson/.venv/bin/python3 /opt/gunderson/gen.py --profile %i --role honeypot --base /opt/gunderson $SEED_ARG
+EnvironmentFile=-/opt/gunderson/systemd/run.env
+ExecStart=/opt/gunderson/.venv/bin/python3 /opt/gunderson/generator/gen.py --profile %i --role honeypot --base /opt/gunderson $SEED_ARG
 RuntimeMaxSec=5h
 Restart=no
 

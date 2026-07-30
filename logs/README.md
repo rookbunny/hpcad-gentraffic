@@ -1,10 +1,14 @@
 # `logs/` — where every capture lands
 
-Nothing in this directory is written by hand. `run_capture.sh`, `gen.py`,
-`zabbix_log.py`, `attacker_log.py` and `log_user.py` create it all at run time.
-The directory and the naming template below are tracked so the expected layout is
-visible before the first capture; real run directories are gitignored and never
-committed, because they hold the dataset.
+Nothing in this directory is written by hand. `capture/run_capture.sh`,
+`generator/gen.py`, `groundtruth/zabbix_log.py`, `groundtruth/attacker_log.py` and
+`groundtruth/log_user.py` create it all at run time. The directory and the naming
+template below are tracked so the expected layout is visible before the first
+capture; real run directories are gitignored and never committed, because they
+hold the dataset.
+
+This directory stays at the repository root, rather than under one of the
+categorized directories, because programs in three of them write into it.
 
 A run is identified by a sequential run id (`0001`, `0002`, ...) and a 5-digit
 seed, folded on disk into one stem — the run tag `R<run_id>-S<seed>`. Each
@@ -29,13 +33,13 @@ logs/
 ```
 
 The `.promsvc.manifest.json` variant appears in the matching run directory on the
-monitoring VM, which runs `gen.py --role promsvc` with the same seed and run id
+monitoring VM, which runs `generator/gen.py --role promsvc` with the same seed and run id
 and so writes its own `logs/<tag>_logs/` there.
 
 Which files exist is a property of the run, not a fixed list.
-`<tag>_knownuser.json` only appears once something is logged with `log_user.py`,
+`<tag>_knownuser.json` only appears once something is logged with `groundtruth/log_user.py`,
 and either per-stream tap writes a `meta.json` recording `enabled: false` instead
-of a pcap when its addresses are missing from `config.yaml`. `capture_report.py`
+of a pcap when its addresses are missing from `config/config.yaml`. `capture/capture_report.py`
 knows the difference and says so at the end of every capture.
 
 `_TEMPLATE_R0000-S00000_logs/` holds one empty file per name above. It is a map,

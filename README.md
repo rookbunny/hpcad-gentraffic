@@ -78,6 +78,10 @@ attack: every packet to or from the attacker address is captured at the packet
 level by `groundtruth/attacker_log.py`, in every run, as its own class (see
 "Attacker traffic" below).
 
+## Repository Chart
+<img width="4520" height="7079" alt="HPC-AD_Architecture_V3" src="https://github.com/user-attachments/assets/e17d92c7-77f0-488c-83d8-12d81f91a7b7" />
+
+
 ## Traffic model
 
 | Process | Period | Jitter | Originates on | Endpoint |

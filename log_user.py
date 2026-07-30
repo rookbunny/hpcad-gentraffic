@@ -23,10 +23,20 @@ import logio
 DEFAULT_BASE = os.path.dirname(os.path.abspath(__file__))
 
 def read_current_run(base):
+    """The active run tag from <base>/.current_run, or "unknown".
+
+    The pointer exists as an empty file before the first capture and run_capture.sh
+    writes the tag into it when one starts, so an empty (or unreadable) file means
+    exactly what an absent one means: no run is active. Returning the empty string
+    instead would send the record to logs/_logs/, a directory belonging to no run.
+    """
     p = os.path.join(base, ".current_run")
-    if os.path.exists(p):
-        return open(p).read().strip()
-    return "unknown"
+    try:
+        with open(p) as f:
+            tag = f.read().strip()
+    except OSError:
+        tag = ""
+    return tag or "unknown"
 
 def main():
     ap = argparse.ArgumentParser()
@@ -42,6 +52,13 @@ def main():
     args = ap.parse_args()
 
     tag = args.tag or read_current_run(args.base)
+    # Still record the event -- a note typed during a live attack must not be lost
+    # to a bad pointer -- but never let it look attached to a capture when it is not.
+    if tag == "unknown":
+        print(f"[!] no active run: {os.path.join(args.base, '.current_run')} is empty"
+              f" or missing and no --tag was given")
+        print(f"[!] logging into {logio.run_dir_for(args.base, tag)}, which belongs to"
+              f" no capture. Pass --tag R<run_id>-S<seed> to attach it to one.")
     run_id, seed = logio.parse_tag(tag)
     run_dir = logio.run_dir_for(args.base, tag)
     rec = {"run_id": run_id, "seed": seed, "source": args.source, "phase": args.phase,

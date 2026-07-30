@@ -44,6 +44,7 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 | `companions/ws_echo_server.py` | chat VM | target for the chat keepalive |
 | `companions/health_server.py` | service VM | target for the healthcheck |
 | [`mirror-persistence/`](mirror-persistence/README.md) | honeypot + monitor | reboot-persistent tc mirror + passive capture setup |
+| [`logs/`](logs/README.md) | every host | where captures land; the layout is documented there, the runs themselves are gitignored |
 
 Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
 browsing. Those are the anomalous and human streams, and they are recorded with
@@ -151,6 +152,9 @@ seed. On disk both are folded into a single stem, the run tag `R<run_id>-S<seed>
 attacker-only `<tag>_attacker_traffic.pcap`, `<tag>.zabbix.meta.json`,
 `<tag>.attacker.meta.json`, and `<tag>.<role>.manifest.json`. A `.current_run`
 pointer at the repository root records the active run tag for `log_user.py`.
+[`logs/README.md`](logs/README.md) draws that tree out in full, next to a
+`_TEMPLATE_R0000-S00000_logs/` directory of empty files showing where each one
+lands before any capture has been taken.
 
 ## Running a capture
 

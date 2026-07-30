@@ -1,8 +1,14 @@
 # generated config holds a password and internal addresses
 config.yaml
 
-# per-run capture directories, ground-truth logs, pcaps
-logs/
+# per-run capture directories, ground-truth logs, pcaps. The directory itself,
+# its README and the naming template are tracked, so the expected layout is
+# visible before the first run; the runs themselves never are. Note the pattern
+# is logs/* rather than logs/: git does not descend into an ignored directory,
+# so the exceptions below would not be reachable.
+logs/*
+!logs/README.md
+!logs/_TEMPLATE_R0000-S00000_logs/
 
 # run pointer and optional seed env file
 .current_run

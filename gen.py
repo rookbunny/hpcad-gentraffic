@@ -233,8 +233,24 @@ def main():
     args = ap.parse_args()
 
     import yaml
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    try:
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+    except OSError as e:
+        sys.exit(f"cannot read {args.config}: {e}\n"
+                 f"    run ./SETUP.sh to generate it from config.example.yaml")
+
+    # Before the first SETUP.sh run, config.yaml is the comment-only placeholder
+    # and yaml hands back None for it. Say which file and what to do about it: the
+    # alternative is a TypeError on the profile lookup below, which names neither.
+    if not cfg:
+        sys.exit(f"{args.config} has no configuration in it yet\n"
+                 f"    run ./SETUP.sh to generate it from config.example.yaml")
+    for section in ("profiles", "processes", "endpoints"):
+        if not cfg.get(section):
+            sys.exit(f"{args.config} has no {section!r} section\n"
+                     f"    re-run ./SETUP.sh to regenerate it from "
+                     f"config.example.yaml")
 
     if args.profile not in cfg["profiles"]:
         sys.exit(f"unknown profile {args.profile!r}; have {list(cfg['profiles'])}")

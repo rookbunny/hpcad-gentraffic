@@ -58,7 +58,12 @@ PYTHON="$HERE/.venv/bin/python3"; [ -x "$PYTHON" ] || PYTHON="python3"
 NEXT=1
 for d in "$HERE"/logs/R*-S*_logs; do
     [ -e "$d" ] || continue
-    b="$(basename "$d")"; num="${b#R}"; num="${num%%-*}"; num=$((10#$num))
+    b="$(basename "$d")"; num="${b#R}"; num="${num%%-*}"
+    # A run id is digits. Anything else in there is not a run directory, and 10#
+    # on it is a fatal arithmetic error under set -e -- which would mean a stray
+    # name in logs/ could stop a capture from ever starting.
+    case "$num" in ''|*[!0-9]*) continue ;; esac
+    num=$((10#$num))
     [ "$num" -ge "$NEXT" ] && NEXT=$((num + 1))
 done
 RUN_ID="$(printf '%04d' "$NEXT")"

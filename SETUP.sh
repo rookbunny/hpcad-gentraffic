@@ -9,7 +9,16 @@ EXAMPLE="$HERE/config.example.yaml"
 OUT="$HERE/config.yaml"
 
 [ -f "$EXAMPLE" ] || { echo "missing config.example.yaml"; exit 1; }
-if [ -f "$OUT" ]; then
+
+# config.yaml exists as a comment-only placeholder before the first run, so its
+# mere presence is not a reason to prompt: a file with no setting in it holds
+# nothing anyone could lose. Only a config that has been written is worth asking
+# about, otherwise the default No answer aborts the one run that had to happen.
+config_has_settings() {
+    grep -qE '^[[:space:]]*[^[:space:]#]' "$1"
+}
+
+if [ -f "$OUT" ] && config_has_settings "$OUT"; then
     read -rp "config.yaml already exists. Overwrite? [y/N] " a
     [[ "$a" =~ ^[Yy]$ ]] || { echo "aborted"; exit 0; }
 fi

@@ -13,10 +13,12 @@ headers, so the cost is independent of capture size. A short final record is
 reported as a truncated tail, which is the signature of a capture that was killed
 mid-write rather than shut down.
 
-The real Zabbix agent's stream is checked too, from the sidecar zabbix_log.py
-writes: whether the packet logger ran at all, what filter it used, and whether
-its dedicated pcap, its own log, and the benign/all-traffic unions agree on how
-many Zabbix packets there were.
+The two per-stream packet taps are checked too, from the sidecars zabbix_log.py
+and attacker_log.py write: whether each logger ran at all, what filter it used,
+and whether its dedicated pcap, its own log, and the unions it joins agree on how
+many packets there were. A disabled ATTACKER tap is a problem rather than a
+warning: attacker ground truth is expected in every run, so its absence means the
+config is wrong and the run cannot be labeled.
 
 Exit status: 0 = every expected file is present and intact; 1 = something is
 missing, empty, truncated, or inconsistent; 2 = the report itself could not run.
@@ -196,11 +198,14 @@ def main():
         print(bar)
         return 1
 
-    # The Zabbix stream is real, not generated, so whether its files are expected
-    # is a property of the run: zabbix_log.py records that in its meta sidecar.
+    # Both packet streams are real, not generated, so whether their files are
+    # expected is a property of the run: each tap records that in its own sidecar.
     zmeta_name = f"{tag}.zabbix.meta.json"
     zmeta = load_json(os.path.join(run_dir, zmeta_name))
     zbx_on = bool(zmeta and zmeta.get("enabled"))
+    ameta_name = f"{tag}.attacker.meta.json"
+    ameta = load_json(os.path.join(run_dir, ameta_name))
+    atk_on = bool(ameta and ameta.get("enabled"))
 
     # name, required, kind
     expected = [
@@ -209,9 +214,12 @@ def main():
         (f"{tag}_knownuser.json",            False,  "ndjson"),
         (f"{tag}_zabbix.pcap",               zbx_on, "pcap"),
         (f"{tag}_knownzabbix.json",          False,  "ndjson"),
+        (f"{tag}_attacker_traffic.pcap",     atk_on, "pcap"),
+        (f"{tag}_attacker_traffic.json",     False,  "ndjson"),
         (f"{tag}_alltraffic.json",           True,   "ndjson"),
         (f"{tag}.{args.role}.manifest.json", True,   "manifest"),
         (zmeta_name,                         False,  "zmeta"),
+        (ameta_name,                         False,  "ameta"),
     ]
 
     problems, warnings, counts, manifest = [], [], {}, None
@@ -234,27 +242,37 @@ def main():
             status = "OK" if zmeta else "CORRUPT"
             detail = ((f"zabbix capture {'enabled' if zbx_on else 'DISABLED'}, "
                        f"{human(size)}") if zmeta else f"not valid JSON, {human(size)}")
+        elif kind == "ameta":
+            status = "OK" if ameta else "CORRUPT"
+            detail = ((f"attacker capture {'enabled' if atk_on else 'DISABLED'}, "
+                       f"{human(size)}") if ameta else f"not valid JSON, {human(size)}")
         else:
             status, detail, manifest = check_manifest(path, size)
         print(f"    {name:<38} {status:<8} {detail}")
         if status != "OK":
-            # An empty Zabbix stream means the agent was quiet or the mirror is
-            # not carrying it: worth saying out loud, but it is not a broken file.
-            if status == "EMPTY" and "zabbix" in name:
+            # An empty per-stream capture is a fact about the run, not a broken
+            # file: the Zabbix agent may have been quiet or off the mirror, and an
+            # empty attacker stream is what a clean baseline should look like.
+            # Both are worth saying out loud; neither invalidates the capture.
+            if status == "EMPTY" and ("zabbix" in name or "attacker" in name):
                 warnings.append(f"{name} is empty")
             else:
                 problems.append(f"{name}: {status.lower()}")
 
-    # alltraffic is the union of the benign and user logs, so the counts must add
-    # up. Zabbix records live inside knownbenign (and so inside alltraffic), which
-    # is what keeps this arithmetic true with the real Zabbix stream folded in.
+    # alltraffic is the holistic union of all three classes, so the counts must add
+    # up. The two per-stream taps sit in that arithmetic differently: Zabbix
+    # records live inside knownbenign (and so are already counted there), while
+    # attacker records are their own class and are counted only here. Getting this
+    # sum right is what proves nothing was double-counted and, just as important,
+    # that no attacker record leaked into the benign or user unions.
     benign = counts.get(f"{tag}_knownbenign.json", 0)
     user = counts.get(f"{tag}_knownuser.json", 0)
+    attacker = counts.get(f"{tag}_attacker_traffic.json", 0)
     every = counts.get(f"{tag}_alltraffic.json", 0)
-    if benign + user != every:
+    if benign + user + attacker != every:
         print(rule)
         print(f"[!] record mismatch: knownbenign({benign}) + knownuser({user})"
-              f" != alltraffic({every})")
+              f" + attacker_traffic({attacker}) != alltraffic({every})")
         problems.append("log record counts do not add up")
 
     # ---------------------------------------------------------------- zabbix
@@ -292,6 +310,50 @@ def main():
             print(f"[!] zabbix union:     {zbx_records} zabbix records but only"
                   f" {benign} in knownbenign")
             problems.append("zabbix records are not folded into knownbenign")
+
+    # -------------------------------------------------------------- attacker
+    # Attacker ground truth is expected in EVERY run, so a tap that never ran or
+    # was disabled is a problem, not a warning: without it, traffic to and from
+    # the attacker address is unlabeled and the run cannot be trusted as a
+    # dataset. An empty stream is different -- that is a finding about the run.
+    atk_packets = counts.get(f"{tag}_attacker_traffic.pcap", 0)
+    print(rule)
+    if ameta is None:
+        print("[!] attacker:         no meta file; the attacker packet logger never"
+              " ran for this run")
+        problems.append("no attacker capture meta file")
+    elif not atk_on:
+        print(f"[!] attacker:         DISABLED -- {ameta.get('reason', 'no reason given')}")
+        print("[!]                   this run has NO attacker ground truth;"
+              " re-run SETUP.sh")
+        problems.append("attacker capture was disabled for this run")
+    else:
+        print(f"[=] attacker filter:  {ameta.get('bpf_filter', '?')}")
+        print(f"[=] attacker stream:  {atk_packets} packets in"
+              f" {tag}_attacker_traffic.pcap, {attacker} records in the logs")
+        print(f"[=] attacker class:   in {tag}_alltraffic.json only, never in"
+              f" knownbenign or knownuser")
+        if ameta.get("ended"):
+            print(f"[=] attacker logger:  stopped by {ameta.get('stopped_by', '?')}"
+                  + (f", {ameta['undecoded']} undecodable frame(s)"
+                     if ameta.get("undecoded") else ""))
+        else:
+            print("[!] attacker logger:  never finalized its meta file")
+            problems.append("attacker logger did not finalize")
+        # Both come from the same tcpdump, one packet at a time, so they can only
+        # differ by the single record a hard kill can cut off mid-write.
+        if abs(atk_packets - attacker) > 1:
+            print(f"[!] attacker mismatch: pcap({atk_packets}) != logged({attacker})")
+            problems.append("attacker pcap and log disagree on packet count")
+        # Zero attacker packets is the correct result for a baseline and evidence
+        # that it is clean. In a run WITH an attack it means the attack was missed:
+        # wrong attacker address in config.yaml, or the mirror is not carrying it.
+        if atk_packets == 0 and args.profile in ("run1", "run2"):
+            print(f"[!] attacker stream:  EMPTY during profile {args.profile}, which"
+                  f" should contain an attack")
+            print("[!]                   check that addresses.attacker_ip is the"
+                  " address the operator actually worked from")
+            warnings.append(f"no attacker packets captured during {args.profile}")
 
     if manifest:
         gen_elapsed = manifest.get("elapsed_seconds")

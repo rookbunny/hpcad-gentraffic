@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Orchestrate one capture: start tcpdump on the mirror, start the Zabbix packet
-# logger, run the generator, then stop all three and verify what landed on disk.
+# Orchestrate one capture: start tcpdump on the mirror, start the Zabbix and
+# attacker packet loggers, run the generator, then stop all four and verify what
+# landed on disk.
 # Everything for the run lands in one directory, logs/<tag>_logs/, under the
 # repository root, where the tag is the run's R<run_id>-S<seed> stem: the pcap,
 # the ground-truth logs, and the manifest. A pointer to the active run (the tag)
@@ -13,6 +14,13 @@
 # (also folded into the benign and all-traffic unions). It reads the Zabbix and
 # attacker addresses from config.yaml; if they are unset it says so loudly and
 # the run proceeds without Zabbix ground truth.
+#
+# ATTACKER: every packet to or from addresses.attacker_ip is known attacker /
+# anomalous traffic by definition, in EVERY profile including the baseline, so
+# attacker_log.py runs on every capture. It records that stream packet by packet
+# into <tag>_attacker_traffic.pcap and <tag>_attacker_traffic.json, folded into
+# <tag>_alltraffic.json but deliberately NOT into the known-benign or known-user
+# unions. An empty attacker stream is the correct result for a clean baseline.
 #
 # STOPPING A RUN: the untimed profiles (run1, run2, selftest -- anything whose
 # run_seconds is null in config.yaml) run for as long as you want them to. Type
@@ -59,6 +67,7 @@ TAG="R${RUN_ID}-S${SEED}"
 RUN_DIR="$HERE/logs/${TAG}_logs"
 PCAP="${RUN_DIR}/${TAG}.pcap"
 ZBX_PCAP="${RUN_DIR}/${TAG}_zabbix.pcap"
+ATK_PCAP="${RUN_DIR}/${TAG}_attacker_traffic.pcap"
 
 SECONDS=0        # bash counts the run for us; $SECONDS is the capture's length
 MAIN_PID=$$
@@ -68,6 +77,7 @@ SUMMARY_DONE=0
 GEN_PID=""
 TCPDUMP_PID=""
 ZBX_PID=""
+ATK_PID=""
 READER_PID=""
 FAILURES=0
 
@@ -154,11 +164,19 @@ stop_children() {
         stop_child "$TCPDUMP_PID" "tcpdump" 15 || FAILURES=$((FAILURES + 1))
     fi
 
-    # Last, so the Zabbix stream is recorded for the whole capture window. It
-    # signals its own tcpdump, drains the tail, and finalizes its meta file.
+    # The two packet taps go last, so each stream is recorded for the whole
+    # capture window. Each signals its own tcpdump, drains the tail, and
+    # finalizes its meta file.
     if [ -n "$ZBX_PID" ]; then
         echo "[*] stopping the zabbix packet logger (pid $ZBX_PID)..."
         stop_child "$ZBX_PID" "zabbix logger" 20 || FAILURES=$((FAILURES + 1))
+    fi
+
+    # Very last: the attacker stream is the label the whole dataset turns on, so
+    # it keeps running until everything that could still generate a packet is down.
+    if [ -n "$ATK_PID" ]; then
+        echo "[*] stopping the attacker packet logger (pid $ATK_PID)..."
+        stop_child "$ATK_PID" "attacker logger" 20 || FAILURES=$((FAILURES + 1))
     fi
     sleep 0.5   # give the kernel a moment to land the final write
 }
@@ -205,6 +223,7 @@ echo "[*] run_id=$RUN_ID  tag=$TAG"
 echo "[*] dir   =$RUN_DIR"
 echo "[*] pcap  =$PCAP  (iface $IFACE)"
 echo "[*] zabbix=$ZBX_PCAP  (real agent traffic, captured separately)"
+echo "[*] attack=$ATK_PCAP  (all traffic to/from the attacker address)"
 echo "[*] seed  =$SEED  -> use this same seed AND run-id for gen.py on the promsvc VM"
 
 # capture everything on the mirror; full snaplen for payload / JA3 analysis
@@ -231,6 +250,17 @@ fi
 "$PYTHON" -u "$HERE/zabbix_log.py" --config "$HERE/config.yaml" --iface "$IFACE" \
     --run-dir "$RUN_DIR" --tag "$TAG" --role honeypot < /dev/null &
 ZBX_PID=$!
+
+# Every packet to or from the attacker address, on every profile. Like the Zabbix
+# logger it owns its own tcpdump, so its dedicated pcap and its ground-truth
+# records are decoded from the same packets. Each tap is a separate kernel BPF
+# filter on the same interface, so the packets it does not want cost it nothing.
+# It self-disables with a loud warning if addresses.attacker_ip is unset or
+# malformed, and capture_report.py reports that as a problem rather than a
+# warning: a run without attacker ground truth cannot be labeled.
+"$PYTHON" -u "$HERE/attacker_log.py" --config "$HERE/config.yaml" --iface "$IFACE" \
+    --run-dir "$RUN_DIR" --tag "$TAG" --role honeypot < /dev/null &
+ATK_PID=$!
 
 # -u so the generator's progress lines survive a redirect to a log file; stdin is
 # /dev/null because the exit watcher below owns the terminal

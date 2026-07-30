@@ -60,21 +60,26 @@ Under `logs/<tag>_logs/` on each host, where the tag is `R<run_id>-S<seed>`:
 
 - `<tag>.pcap` (capture host only; the whole wire)
 - `<tag>_zabbix.pcap` (capture host only; the real Zabbix agent's packets on their own)
+- `<tag>_attacker_traffic.pcap` (capture host only; should be **empty** in a baseline)
 - `<tag>_knownbenign.json` (scripted benign events plus one record per Zabbix packet)
 - `<tag>_knownzabbix.json` (the Zabbix stream on its own, a subset of the benign union)
 - `<tag>_alltraffic.json` (union view, distinguished by the `class` field)
 - `<tag>.zabbix.meta.json` (the Zabbix filter, addresses, counts, and stop reason)
+- `<tag>.attacker.meta.json` (the attacker filter, address, counts, and stop reason)
 - `<tag>.<role>.manifest.json` (one per host, with started, ended, and event counts)
 
 A baseline has no `<tag>_knownuser.json` unless a manual action was logged, which should not happen during a clean baseline.
 
 A four hour baseline is the run where the Zabbix stream matters most, since it is the one the models train on. Confirm the closing summary reports a Zabbix packet count in the thousands rather than zero.
 
+**The attacker tap runs on a baseline too, and it should capture nothing.** That is the point: a zero-packet `<tag>_attacker_traffic.pcap` is positive evidence the training data is clean, rather than an assumption that it is. The summary reports the empty stream as a warning, which is expected here. Any non-zero count in a baseline means the operator address was active during the window and the capture is **not** a clean baseline — investigate before training on it.
+
 ## Verification checklist
 
 - The manifest reports `expected_buckets` of 960 and a populated `event_counts`.
 - Each benign process shows a plausible count for a 4 hour window.
 - The Zabbix line in the summary shows a non-zero packet count, and the pcap and log counts match.
+- The attacker line in the summary shows **zero** packets. A non-zero count means the baseline is contaminated. `attacker: DISABLED` is a problem and exits non-zero: fix `addresses.attacker_ip` and re-run, since a baseline with no attacker tap cannot be shown to be clean.
 - The capture host and the monitoring VM share the same tag, so their records merge cleanly by `run_id` and `seed`.
 - Capture the baseline and every run at the same 15 second span, or the count and volume features will not be comparable.
 

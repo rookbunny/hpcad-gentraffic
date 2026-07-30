@@ -31,13 +31,23 @@ read -rp "node_exporter port [9100]: " NE_PORT; NE_PORT=${NE_PORT:-9100}
 # traffic is simulated: the real zabbix-agent daemon is the only source, and
 # these two addresses are what zabbix_log.py filters its packet capture on. The
 # attacker address is excluded from that filter, so an operator impersonating
-# the Zabbix service account is never labeled as benign telemetry.
+# the Zabbix service account is never labeled as benign telemetry; attacker_log.py
+# captures every packet to or from it as its own class instead. That makes the
+# attacker address the single most important value here: get it wrong and the
+# attack lands in the capture with no label on it.
 echo
 echo "Zabbix / attacker addresses (packet attribution; no Zabbix is simulated)."
 read -rp "Zabbix server IP: " ZBX_SERVER_IP
 read -rp "Zabbix agent IP (the honeypot itself) [${HP_IP}]: " ZBX_AGENT_IP
 ZBX_AGENT_IP=${ZBX_AGENT_IP:-$HP_IP}
-read -rp "Attacker IP (operator/C2 source; excluded from the Zabbix filter): " ATTACKER_IP
+echo "Attacker IP: the address the operator ACTUALLY works from during run1/run2."
+echo "  All traffic to/from it is captured and labeled as attacker traffic; it is"
+echo "  also excluded from the Zabbix filter. A CIDR is accepted for several hosts."
+read -rp "Attacker IP: " ATTACKER_IP
+while [ -z "$ATTACKER_IP" ]; do
+    echo "  [!] required: without it no run can produce attacker ground truth."
+    read -rp "Attacker IP: " ATTACKER_IP
+done
 
 # substitution done in Python so passwords with shell/sed metacharacters are safe
 IMAP_HOST="$MAIL_IP" SMTP_HOST="$MAIL_IP" IMAP_PORT="$IMAP_PORT" IMAP_USER="$IMAP_USER" \

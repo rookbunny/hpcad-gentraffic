@@ -37,6 +37,8 @@ The `selftest` profile runs the `noop` process, which touches no real endpoint. 
 
    The summary also reports the Zabbix capture: the BPF filter it used, and how many packets landed in `<tag>_zabbix.pcap` and in the logs. A half-minute selftest may legitimately catch no Zabbix packets, which is reported as a warning rather than a failure. What must not appear is `zabbix: DISABLED` — that means `config.yaml` has no Zabbix addresses, so re-run `SETUP.sh` before a real capture.
 
+   It reports the attacker capture the same way, and here `attacker: DISABLED` is a **problem** rather than a warning, so the summary ends non-zero. Attacker ground truth is expected in every run, so a missing or malformed `addresses.attacker_ip` has to be fixed with `SETUP.sh` before any real capture. Zero attacker packets during a selftest is fine and expected.
+
 ## Part A2. Zabbix capture wiring test
 
 Zabbix traffic is real, not generated, so it is worth confirming separately that the agent is talking and that its conversation reaches the mirror.
@@ -62,6 +64,28 @@ Zabbix traffic is real, not generated, so it is worth confirming separately that
    ```
 
    Nothing at all here means either the agent is idle, the server is not polling it, or the mirror is not carrying the Zabbix conversation. Fix that before a real capture: the run would otherwise produce an empty Zabbix stream.
+
+## Part A3. Attacker capture wiring test
+
+Every packet to or from the attacker address is labeled as attacker traffic, so this filter has to be right before `run1` or `run2`. Getting it wrong does not fail loudly during the run — it silently produces an unlabeled attack.
+
+1. Print the filter the logger will use. It must name the address you will actually attack from.
+
+   ```bash
+   ./.venv/bin/python3 attacker_log.py --print-filter --iface ens19 \
+       --run-dir /tmp --tag R0000-S00000
+   ```
+
+   A `# disabled:` line instead of a filter means `addresses.attacker_ip` is unset or malformed. Re-run `SETUP.sh`.
+
+2. Generate one packet from the attacker host and confirm the mirror carries it. Anything works — a single SSH connection attempt, or one ping.
+
+   ```bash
+   sudo tcpdump -i ens19 -nn "$(./.venv/bin/python3 attacker_log.py --print-filter \
+       --iface ens19 --run-dir /tmp --tag R0000-S00000)"
+   ```
+
+   Silence while the attacker host is actively sending means the mirror is not carrying that conversation, or the configured address is not the one in use. Either way the run would produce an empty attacker stream and an unlabeled attack.
 
 3. Confirm the run directory and the run pointer.
 
@@ -124,6 +148,7 @@ Manual web browsing originates on the honeypot and exits to an external target. 
 - Proxied browsing appears on the mirror as flows sourced from the honeypot.
 - Manual browsing records appear in `<tag>_knownuser.json` and `<tag>_alltraffic.json` with `class=user`.
 - The summary reports the Zabbix capture as enabled, with a filter naming the configured addresses. Real Zabbix packets are visible on the mirror under that filter.
+- The summary reports the attacker capture as enabled, with a filter naming the address the operator will actually work from, and a packet from that host is visible on the mirror under that filter.
 
 ## Cleanup
 

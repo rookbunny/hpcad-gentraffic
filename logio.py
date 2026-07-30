@@ -5,17 +5,30 @@ On disk both are folded into a single stem, the run tag R<run_id>-S<seed> (e.g.
 R0001-S12345). All output for a run lives in a per-run directory
 logs/<tag>_logs/ and every file inside is prefixed with the tag:
 
-  <tag>_knownbenign.json  scripted benign generator events + real Zabbix packets
-  <tag>_knownuser.json    human/manual events (attacker actions, web browsing)
-  <tag>_knownzabbix.json  the real Zabbix agent's traffic, one record per packet
-  <tag>_alltraffic.json   union of the benign and user classes
+  <tag>_knownbenign.json      scripted benign generator events + real Zabbix packets
+  <tag>_knownuser.json        human/manual events (attacker actions, web browsing)
+  <tag>_knownzabbix.json      the real Zabbix agent's traffic, one record per packet
+  <tag>_attacker_traffic.json every packet to or from the attacker address
+  <tag>_alltraffic.json       union of every class: benign, user, attacker
 
-A Zabbix record is written to knownzabbix (its own view of that stream) AND to
-knownbenign (the holistic union of everything known-benign) AND to alltraffic
-(the union of everything), one copy in each: knownzabbix is a subset of
-knownbenign, exactly as knownbenign is a subset of alltraffic, so
-knownbenign + knownuser == alltraffic still holds with the Zabbix stream folded
-in. Nothing is counted twice.
+There are three CLASSES -- benign, user, attacker -- and alltraffic is their
+holistic union, so
+
+    knownbenign + knownuser + attacker_traffic == alltraffic
+
+holds exactly, and capture_report.py checks it. Nothing is counted twice.
+
+The per-stream files sit inside that arithmetic differently, and the difference
+is the point:
+
+  knownzabbix is a SUBSET VIEW of knownbenign. The Zabbix stream is genuinely
+  benign telemetry, so each of its records goes to knownzabbix (its own view of
+  that stream) AND knownbenign AND alltraffic, one copy in each.
+
+  attacker_traffic is a CLASS OF ITS OWN. Each of its records goes to
+  attacker_traffic AND alltraffic only -- never to knownbenign or knownuser,
+  because adversary traffic is neither known-benign nor known-user, and folding
+  it into either would poison the label it is there to define.
 
 Files are newline-delimited JSON (one record per line). Writes use a single
 os.write() to an O_APPEND descriptor, which is atomic for records below the
@@ -87,4 +100,20 @@ def write_zabbix(run_dir, tag, record):
     record.setdefault("source", "zabbix_agent")
     atomic_append(_path(run_dir, tag, "knownzabbix"), record)
     atomic_append(_path(run_dir, tag, "knownbenign"), record)
+    atomic_append(_path(run_dir, tag, "alltraffic"), record)
+
+def write_attacker(run_dir, tag, record):
+    """One packet to or from the attacker address: its own log, plus alltraffic.
+
+    Attacker traffic is its own class, so unlike write_zabbix this writes to
+    exactly two files: the dedicated attacker log and the holistic union of the
+    ENTIRE capture. It must never append to knownbenign or knownuser -- those are
+    the known-benign and known-user unions, and this stream is neither (see the
+    module docstring). attacker_log.py records it packet by packet from the real
+    wire; nothing generates it.
+    """
+    os.makedirs(run_dir, exist_ok=True)
+    record.setdefault("class", "attacker")
+    record.setdefault("source", "attacker_ip")
+    atomic_append(_path(run_dir, tag, "attacker_traffic"), record)
     atomic_append(_path(run_dir, tag, "alltraffic"), record)

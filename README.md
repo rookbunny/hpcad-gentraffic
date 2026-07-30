@@ -36,6 +36,8 @@ This methodology ensures that the resulting dataset usable as a golden evaluatio
 | `SETUP.sh` | each host | prompts for range values, writes `config.yaml` |
 | `run_capture.sh` | capture host | tcpdump + generator, tied under one run id |
 | `zabbix_log.py` | capture host | captures and labels the REAL Zabbix agent's traffic |
+| `attacker_log.py` | capture host | captures and labels ALL traffic to/from the attacker IP |
+| `pcaptap.py` | — | shared packet-tap machinery behind those two |
 | `log_user.py` | capture host | records manual/attacker events into the ground truth |
 | `logio.py` | — | shared append-only logging |
 | `systemd/Honeypot_gentraffic@.service` | honeypot | optional bounded service for long runs |
@@ -47,7 +49,9 @@ Not generated here: the C2 beacon (hand-run in the C2 framework) and manual web
 browsing. Those are the anomalous and human streams, and they are recorded with
 `log_user.py`. Zabbix is not generated either — that stream comes from the real
 `zabbix-agent` daemon on the Rocky 9 honeypot and is captured at the packet level
-by `zabbix_log.py` (see "Zabbix" below).
+by `zabbix_log.py` (see "Zabbix" below). Nor is the attack: every packet to or
+from the attacker address is captured at the packet level by `attacker_log.py`,
+in every run, as its own class (see "Attacker traffic" below).
 
 ## Traffic model
 
@@ -60,7 +64,7 @@ by `zabbix_log.py` (see "Zabbix" below).
 | Prometheus scrape | 50s | ±10s | promsvc VM | honeypot :9100 |
 | Zabbix agent | the daemon's own interval | — | honeypot ↔ Zabbix server | **real, not generated**; captured per packet |
 | web browsing | manual | — | honeypot | external (operator) |
-| C2 beacon | 60s | ±15s | attacker → honeypot | hand-run, not here |
+| C2 beacon | 60s | ±15s | attacker → honeypot | hand-run, not here; **captured per packet** |
 
 Any flow must cross the wire to reach the mirror, so every internal endpoint
 must be a different host than the honeypot.
@@ -112,7 +116,15 @@ dependencies, and never uses the mail password.
    Three of its prompts are addresses used to attribute packets rather than to
    generate traffic: the **Zabbix server IP**, the **Zabbix agent IP** (the
    honeypot itself, which defaults to the honeypot address already entered), and
-   the **attacker IP**. `zabbix_log.py` builds its capture filter from them.
+   the **attacker IP**. `zabbix_log.py` and `attacker_log.py` build their capture
+   filters from them.
+
+   The attacker IP must be the address the operator **actually works from** during
+   `run1`/`run2`. Every packet to or from it is labeled as attacker traffic, so if
+   it is wrong the attack still lands in `<tag>.pcap` but with no label on it, and
+   the run is not usable as ground truth. A CIDR is accepted when the operator
+   works from more than one host. Re-run `SETUP.sh` if the address changes between
+   captures.
 
 4. Start the companion targets so the chat keepalive and healthcheck have
    endpoints. Run each on its respective VM.
@@ -134,18 +146,19 @@ A run is identified by a sequential run id (`0001`, `0002`, ...) and a 5-digit
 seed. On disk both are folded into a single stem, the run tag `R<run_id>-S<seed>`
 (for example `R0001-S12345`). Each capture creates its own directory
 `logs/<tag>_logs/` under the repository root, containing `<tag>_knownbenign.json`,
-`<tag>_knownuser.json`, `<tag>_knownzabbix.json`, `<tag>_alltraffic.json`, the
-`<tag>.pcap`, the Zabbix-only `<tag>_zabbix.pcap`, `<tag>.zabbix.meta.json`, and
-`<tag>.<role>.manifest.json`. A `.current_run` pointer at the repository root
-records the active run tag for `log_user.py`.
+`<tag>_knownuser.json`, `<tag>_knownzabbix.json`, `<tag>_attacker_traffic.json`,
+`<tag>_alltraffic.json`, the `<tag>.pcap`, the Zabbix-only `<tag>_zabbix.pcap`, the
+attacker-only `<tag>_attacker_traffic.pcap`, `<tag>.zabbix.meta.json`,
+`<tag>.attacker.meta.json`, and `<tag>.<role>.manifest.json`. A `.current_run`
+pointer at the repository root records the active run tag for `log_user.py`.
 
 ## Running a capture
 
 A capture involves two hosts. The same seed is used on both: one seed reproduces
 the whole run because each process is seeded from `(seed, process_name)`.
 
-1. On the capture host, start tcpdump, the Zabbix packet logger, and the honeypot
-   processes. The script prints a run id and seed.
+1. On the capture host, start tcpdump, the Zabbix and attacker packet loggers, and
+   the honeypot processes. The script prints a run id and seed.
 
    ```bash
    sudo ./run_capture.sh baseline ens19          # fresh 5-digit seed
@@ -248,31 +261,50 @@ logs rather than from the timing.
 All ground truth for a capture lives in that capture's `logs/<tag>_logs/`
 directory as newline-delimited JSON:
 
+There are three **classes** — `benign`, `user`, and `attacker` — and
+`alltraffic` is their holistic union:
+
 - `<tag>_knownbenign.json` — the holistic benign union: every scripted benign
   action, plus one record per real Zabbix packet.
 - `<tag>_knownuser.json` — every manual action recorded via `log_user.py`
   (attacker actions and web browsing).
 - `<tag>_knownzabbix.json` — the real Zabbix agent's traffic on its own, one
   record per packet. A subset view of `knownbenign`, not a separate class.
+- `<tag>_attacker_traffic.json` — every packet to or from the attacker address,
+  one record per packet. A **class of its own**: it is folded into `alltraffic`
+  and deliberately *not* into `knownbenign` or `knownuser`.
 - `<tag>_alltraffic.json` — the union of everything, distinguished by the
-  `class` field. `knownbenign + knownuser == alltraffic` holds exactly, with the
-  Zabbix stream counted once inside `knownbenign`; `capture_report.py` checks
-  that arithmetic at the end of every run.
+  `class` field. `knownbenign + knownuser + attacker_traffic == alltraffic` holds
+  exactly, with the Zabbix stream counted once inside `knownbenign`;
+  `capture_report.py` checks that arithmetic at the end of every run.
+
+The two per-stream logs sit inside that arithmetic differently, and the
+difference is the point. `knownzabbix` is a *subset view* of `knownbenign`,
+because Zabbix telemetry genuinely is benign. `attacker_traffic` is a *separate
+class*, because adversary traffic is neither known-benign nor known-user, and
+folding it into either union would poison the very label it exists to define.
+
+Note that the `attacker` class covers **packets**, not annotations. The operator's
+own notes about what they were doing — `log_user.py --source attacker` — stay in
+`knownuser.json` with `class=user`, deliberately: they are human keyboard events
+recorded by hand, not traffic observed on the wire, and they are what you read the
+packet labels *against*. The packets say what crossed the wire; the notes say what
+the operator was doing at the time.
 
 Every record also carries `run_id`, `seed`, and `role`, so events remain
-attributable per host even after files from multiple hosts are merged. Zabbix
-records use the same shape as the generator's, with `proc: zabbix` and
-`source: zabbix_agent`, so they merge without special casing.
+attributable per host even after files from multiple hosts are merged. Zabbix and
+attacker records use the same shape as the generator's, with `proc: zabbix` /
+`proc: attacker` and a `source` field, so they merge without special casing.
 
-Two capture files sit in the same directory: `<tag>.pcap` is the whole wire, and
-`<tag>_zabbix.pcap` is the Zabbix subset of it, written by a separate tcpdump so
-the real Zabbix stream can be handled on its own without ever being mixed into
-the generated-traffic capture. The relationship is the same one the logs have —
-the Zabbix packets are present in the all-traffic capture exactly once, and
-mirrored into their own file. Within a run window, only the scripted benign set,
-the real Zabbix stream, the recorded manual actions, and the emulated adversary
-are present, so any packet not attributable to a benign, Zabbix, or user record
-belongs to the adversary.
+Three capture files sit in the same directory: `<tag>.pcap` is the whole wire,
+and `<tag>_zabbix.pcap` and `<tag>_attacker_traffic.pcap` are two subsets of it,
+each written by its own tcpdump so those streams can be handled on their own
+without ever being mixed into the generated-traffic capture. The relationship is
+the same one the logs have — each packet is present in the all-traffic capture
+exactly once, and mirrored into its stream's own file. Within a run window only
+the scripted benign set, the real Zabbix stream, the recorded manual actions, and
+the adversary are present, so any packet not attributable to a benign, Zabbix,
+user, or attacker record is the residue worth looking at.
 
 Capture the baseline and every run at the same 15s span. Count and volume
 features scale with the span, so the training baseline and the run scored against
@@ -323,14 +355,74 @@ honeypot does. 10050 is the agent's passive checks and 10051 is the server side
 
 **The attacker address is excluded.** `run2`'s covert operator impersonates the
 Zabbix service account, so packets from `addresses.attacker_ip` are the
-adversary's and must not be labeled as benign telemetry. They stay in the main
-pcap and are recorded by hand with `log_user.py`. Set
-`zabbix_capture.exclude_attacker: false` to fold them in anyway.
+adversary's and must not be labeled as benign telemetry. `attacker_log.py`
+captures and labels them instead, as attacker traffic. Set
+`zabbix_capture.exclude_attacker: false` to fold them into the Zabbix stream
+anyway.
 
 If `config.yaml` has no Zabbix addresses, the logger disables itself, says so
 loudly, and writes `<tag>.zabbix.meta.json` with `enabled: false` and the reason,
 so the closing summary reports the gap instead of a run quietly lacking Zabbix
 ground truth. Re-run `SETUP.sh` to fix it.
+
+## Attacker traffic
+
+Any packet whose source or destination is `addresses.attacker_ip` is known
+attacker/anomalous traffic **by definition** — whatever protocol it speaks and
+whatever port it lands on. That is a property of the address, not of the run
+type, so `attacker_log.py` runs on **every** capture including the baseline.
+
+`run_capture.sh` starts it alongside the run's main tcpdump and stops it last, so
+the attacker stream is recorded for the whole capture window. It can also be run
+by hand:
+
+```bash
+sudo ./.venv/bin/python3 attacker_log.py --iface ens19 \
+    --run-dir logs/R0001-S12345_logs --tag R0001-S12345
+```
+
+Like the Zabbix logger it owns one tcpdump and tees it: every packet is written
+through to `<tag>_attacker_traffic.pcap` byte for byte **and** decoded into one
+ground-truth record, so the dedicated pcap and the log come from the same packets
+and cannot disagree. `capture_report.py` verifies that by comparing their counts.
+Both taps share the capture loop and header decoding in `pcaptap.py`.
+
+What lands where, for one attacker packet:
+
+| File | Contents |
+|---|---|
+| `<tag>_attacker_traffic.pcap` | the packet, in the attacker-only capture |
+| `<tag>.pcap` | the same packet, in the whole-wire capture (it is the union) |
+| `<tag>_attacker_traffic.json` | one record: src/dst, ports, TCP flags, lengths, direction, peer |
+| `<tag>_alltraffic.json` | the same record, in the all-traffic union — once, never twice |
+| `<tag>_knownbenign.json` | **never** — attacker traffic is not benign |
+| `<tag>_knownuser.json` | **never** — attacker traffic is not the known user |
+| `<tag>.attacker.meta.json` | the run's BPF filter, address, counts, and stop reason |
+
+**The filter is the whole address, not a port list.** Unlike the Zabbix filter,
+which must be port-scoped because the agent runs *on* the honeypot, the attacker
+address is not the honeypot — so `host <attacker_ip>` is exactly the wanted
+stream, down to the stray ICMP and the scan that never got an answer. A CIDR
+works when the operator uses several hosts. Each record carries `direction`
+(`attacker_to_target` / `target_to_attacker`) and `peer`, the address at the
+other end.
+
+**It catches what nothing else did.** Because the Zabbix filter deliberately
+excludes the attacker address, `run2`'s Zabbix-service-account impersonation used
+to appear only in the whole-wire pcap with no record of its own. Those packets now
+land here, labeled as the adversary's.
+
+**An empty attacker stream is a result, not a failure.** Zero attacker packets is
+what a clean baseline should look like, and it is positive evidence the baseline
+*is* clean. In `run1`/`run2` it means the attack was missed — a wrong
+`attacker_ip`, or a mirror that is not carrying it — so the closing summary warns
+about that case specifically.
+
+If `addresses.attacker_ip` is unset or malformed, the logger disables itself,
+says so loudly, and writes `<tag>.attacker.meta.json` with `enabled: false`.
+`capture_report.py` reports that as a **problem** rather than a warning, and the
+run exits non-zero: attacker ground truth is expected in every run, so its absence
+means the config is wrong and the capture cannot be labeled. Re-run `SETUP.sh`.
 
 ## One more decision worth knowing
 

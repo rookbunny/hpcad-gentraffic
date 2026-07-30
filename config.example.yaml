@@ -37,11 +37,17 @@ endpoints:
     - "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
 
 # Range addresses used to ATTRIBUTE packets, never to generate traffic. Written
-# by SETUP.sh; read by zabbix_log.py to build its capture filter.
+# by SETUP.sh; read by zabbix_log.py and attacker_log.py to build their capture
+# filters.
 addresses:
   zabbix_server_ip: "__ZABBIX_SERVER_IP__"  # the Zabbix server that polls the agent
   zabbix_agent_ip:  "__ZABBIX_AGENT_IP__"   # the honeypot, where zabbix-agent runs
-  attacker_ip:      "__ATTACKER_IP__"       # operator / C2 source address
+  # Operator / C2 source address. Every packet to or from it is known attacker
+  # traffic, in every run: attacker_log.py captures the whole stream into
+  # <tag>_attacker_traffic.pcap / .json. This MUST be the address the operator
+  # actually works from, or the attack lands in the capture unlabeled. A CIDR is
+  # accepted when the operator uses more than one host.
+  attacker_ip:      "__ATTACKER_IP__"
 
 # Packet-level capture of the REAL Zabbix agent's traffic. No Zabbix traffic is
 # simulated anywhere in this repository; the zabbix-agent daemon on the honeypot
@@ -56,7 +62,7 @@ zabbix_capture:
   ports: [10050, 10051]
   # Exclude attacker_ip from the Zabbix filter. run2's covert operator
   # impersonates the Zabbix service account, and those packets are the
-  # adversary's: they stay in the main pcap and are logged with log_user.py.
+  # adversary's: attacker_log.py captures and labels them instead.
   exclude_attacker: true
 
 # Cadence table. period/jitter/duration in SECONDS. host = which --role runs it.

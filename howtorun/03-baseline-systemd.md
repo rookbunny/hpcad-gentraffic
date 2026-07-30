@@ -10,6 +10,7 @@
 - The unit is a template. The instance name after `@` is passed straight through to the generator as the profile via `%i`. Starting `Honeypot_gentraffic@baseline` runs the `baseline` profile.
 - The unit runs the generator only. It does not start tcpdump, so it does not produce a pcap on its own.
 - It also does not start `zabbix_log.py`, so a service-only baseline has no Zabbix pcap and no Zabbix records. The real Zabbix agent keeps sending either way, but nothing captures or labels that stream. Use `run_capture.sh` for any baseline that needs Zabbix ground truth, which is any baseline the models will train on.
+- Nor does it start `attacker_log.py`, so a service-only baseline has no attacker pcap and no attacker records. Nothing is being labeled as attacker traffic, which also means nothing demonstrates the baseline is free of it. That is a second reason to use `run_capture.sh` for any baseline the models will train on.
 - `RuntimeMaxSec` is set to 5 hours as a hard backstop. The driver already exits at `run_seconds`, so the backstop only matters if the driver hangs.
 - `Restart=no`, so the run does not relaunch after the window ends.
 

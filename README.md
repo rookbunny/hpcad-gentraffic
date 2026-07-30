@@ -1,10 +1,8 @@
-<img width="995" height="407" alt="white-rabbit-logo" src="https://github.com/user-attachments/assets/f28fc8cb-c0eb-4947-9b85-39a6bab2f95f" />
-
-# White-Rabbit: Honeypot Benign Traffic Generator
+# Honeypot Benign Traffic Generator and Holistic Logger
 
 ## Overview
 
-WHITE-RABBIT is a summer-internship project at a government high-performance
+This repo is the code storage for a summer-internship project at a government high-performance
 computing center. It engineers and red-teams a purpose-built honeypot virtual
 machine in order to test network anomaly-detection machine-learning models.
 Traffic from the honeypot is mirrored to standalone detection stacks, and two
